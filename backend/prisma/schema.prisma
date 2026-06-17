@@ -1,0 +1,69 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id        Int       @id @default(autoincrement())
+  email     String    @unique
+  password  String
+  role      Role      @default(VET)
+  createdAt DateTime  @default(now())
+  patients  Patient[]
+}
+
+model Patient {
+  id             Int             @id @default(autoincrement())
+  name           String
+  species        String
+  breed          String
+  age            Int
+  ownerId        Int
+  owner          User            @relation(fields: [ownerId], references: [id])
+  createdAt      DateTime        @default(now())
+  medicalRecords MedicalRecord[]
+  appointments   Appointment[]
+}
+
+model Appointment {
+  id             Int               @id @default(autoincrement())
+  patientId      Int
+  patient        Patient           @relation(fields: [patientId], references: [id])
+  date           DateTime
+  reason         String
+  status         AppointmentStatus @default(PENDING)
+  clinicName     String?
+  clinicAddress  String?
+  clinicLat      Float?
+  clinicLon      Float?
+  anamnesisId    String?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+}
+
+model MedicalRecord {
+  id        Int      @id @default(autoincrement())
+  patientId Int
+  patient   Patient  @relation(fields: [patientId], references: [id])
+  symptoms  String[]
+  notes     String?
+  aiResult  Json?
+  anamnesis Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum Role {
+  VET
+  ADMIN
+}
+
+enum AppointmentStatus {
+  PENDING
+  SCHEDULED
+  COMPLETED
+  CANCELLED
+}
