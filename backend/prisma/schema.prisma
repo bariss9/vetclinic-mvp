@@ -10,9 +10,11 @@ model User {
   id        Int       @id @default(autoincrement())
   email     String    @unique
   password  String
-  role      Role      @default(VET)
+  name      String?
+  role      Role      @default(OWNER)
   createdAt DateTime  @default(now())
   patients  Patient[]
+  clinic    Clinic?
 }
 
 model Patient {
@@ -31,7 +33,7 @@ model Patient {
 model Appointment {
   id             Int               @id @default(autoincrement())
   patientId      Int
-  patient        Patient           @relation(fields: [patientId], references: [id])
+  patient        Patient           @relation(fields: [patientId], references: [id], onDelete: Cascade)
   date           DateTime
   reason         String
   status         AppointmentStatus @default(PENDING)
@@ -47,7 +49,7 @@ model Appointment {
 model MedicalRecord {
   id        Int      @id @default(autoincrement())
   patientId Int
-  patient   Patient  @relation(fields: [patientId], references: [id])
+  patient   Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
   symptoms  String[]
   notes     String?
   aiResult  Json?
@@ -56,9 +58,19 @@ model MedicalRecord {
   updatedAt DateTime @updatedAt
 }
 
+model Clinic {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @unique
+  user      User     @relation(fields: [userId], references: [id])
+  name      String
+  address   String?
+  phone     String?
+  createdAt DateTime @default(now())
+}
+
 enum Role {
-  VET
-  ADMIN
+  OWNER
+  CLINIC
 }
 
 enum AppointmentStatus {

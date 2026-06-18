@@ -22,6 +22,9 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
 }
 
 export const api = {
+  register: (data: { email: string; password: string; name?: string; role?: 'OWNER' | 'CLINIC'; clinicName?: string }) =>
+    req<{ id: number; email: string; role: string }>('POST', '/auth/register', data),
+
   login: (email: string, password: string) =>
     req<{ access_token: string }>('POST', '/auth/login', { email, password }),
 
@@ -34,6 +37,9 @@ export const api = {
   createPatient: (data: CreatePatientInput) =>
     req<Patient>('POST', '/patients', data),
 
+  deletePatient: (id: number) =>
+    req<void>('DELETE', `/patients/${id}`),
+
   getMedicalRecords: () =>
     req<MedicalRecord[]>('GET', '/medical-records'),
 
@@ -43,7 +49,7 @@ export const api = {
   chatAnamnesis: (data: { message: string; history: ChatMessage[]; patientId: number }) =>
     req<ChatResponse>('POST', '/anamnesis/chat', data),
 
-  saveAnamnesis: (data: { patientId: number; anamnesis: object }) =>
+  saveAnamnesis: (data: { patientId: number; anamnesis: object; notes?: string }) =>
     req<MedicalRecord>('POST', '/anamnesis/save', data),
 
   getAppointments: () =>
@@ -51,6 +57,12 @@ export const api = {
 
   createAppointment: (data: CreateAppointmentInput) =>
     req<Appointment>('POST', '/appointments', data),
+
+  updateAppointment: (id: number, data: { status: string }) =>
+    req<Appointment>('PUT', `/appointments/${id}`, data),
+
+  getMedicalRecord: (id: number) =>
+    req<MedicalRecord>('GET', `/medical-records/${id}`),
 };
 
 export interface Patient {
@@ -140,7 +152,15 @@ export interface Appointment {
   anamnesisId: string | null;
   createdAt: string;
   updatedAt: string;
-  patient: { id: number; name: string; ownerId: number };
+  patient: {
+    id: number;
+    name: string;
+    species: string;
+    breed: string;
+    age: number;
+    ownerId: number;
+    owner: { id: number; name: string | null; email: string };
+  };
 }
 
 export interface DiagnoseInput {

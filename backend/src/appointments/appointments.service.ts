@@ -13,10 +13,18 @@ export class AppointmentsService {
     return patient;
   }
 
+  private readonly patientInclude = {
+    patient: {
+      include: {
+        owner: { select: { id: true, name: true, email: true } },
+      },
+    },
+  } as const;
+
   private async resolveAppointment(id: number) {
     const appointment = await this.prisma.appointment.findUnique({
       where: { id },
-      include: { patient: { select: { id: true, name: true, ownerId: true } } },
+      include: this.patientInclude,
     });
     if (!appointment) throw new NotFoundException(`Appointment #${id} not found`);
     return appointment;
@@ -24,7 +32,7 @@ export class AppointmentsService {
 
   findAll() {
     return this.prisma.appointment.findMany({
-      include: { patient: { select: { id: true, name: true, ownerId: true } } },
+      include: this.patientInclude,
       orderBy: { date: 'asc' },
     });
   }
@@ -53,7 +61,7 @@ export class AppointmentsService {
         clinicLon:     dto.clinicLon,
         anamnesisId:   dto.anamnesisId,
       },
-      include: { patient: { select: { id: true, name: true, ownerId: true } } },
+      include: this.patientInclude,
     });
   }
 
@@ -66,7 +74,7 @@ export class AppointmentsService {
         ...(dto.reason !== undefined && { reason: dto.reason }),
         ...(dto.status !== undefined && { status: dto.status as AppointmentStatus }),
       },
-      include: { patient: { select: { id: true, name: true, ownerId: true } } },
+      include: this.patientInclude,
     });
   }
 

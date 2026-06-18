@@ -1,4 +1,4 @@
-import { IsString, IsInt, IsArray, ValidateNested, IsIn, IsObject } from 'class-validator';
+import { IsString, IsInt, IsArray, ValidateNested, IsIn, IsObject, IsOptional } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class ChatMessageDto {
@@ -28,4 +28,8 @@ export class SaveAnamnesisDto {
 
   @IsObject()
   anamnesis: Record<string, unknown>;
+
+  @IsString()
+  @IsOptional()
+  notes?: string;
 }

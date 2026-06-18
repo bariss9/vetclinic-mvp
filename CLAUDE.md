@@ -12,25 +12,42 @@ The goal is:
 
 ---
 
-## CURRENT PROJECT STATUS (updated 2026-06-17)
+## CURRENT PROJECT STATUS (updated 2026-06-18)
 
 ### Completed — All modules built and working
 
 #### Backend (NestJS, running on http://localhost:3000)
-- **users** — register + login, JWT auth
-- **patients** — full CRUD, ownerId from JWT
-- **medical-records** — CRUD, symptoms[], aiResult JSON, anamnesis JSON
-- **appointments** — CRUD, status enum
+- **users** — register + login, JWT auth; User model has `role` enum (OWNER/CLINIC, default OWNER), optional `name`; JWT payload includes `{ sub, email, role }`
+- **Clinic model** — linked 1:1 to User (userId unique FK); created automatically on register if role=CLINIC and clinicName provided
+- **patients** — full CRUD, ownerId from JWT; cascade deletes on MedicalRecord and Appointment FKs
+- **medical-records** — CRUD, symptoms[], aiResult JSON, anamnesis JSON, notes
+- **appointments** — CRUD, status enum (PENDING/SCHEDULED/COMPLETED/CANCELLED); GET returns full patient + owner info
 - **ai** — POST /ai/diagnose (Anthropic key placeholder, currently returns structured mock)
-- **anamnesis** — POST /anamnesis/chat (Groq LLM), POST /anamnesis/save
+- **anamnesis** — POST /anamnesis/chat (Groq LLM, deterministic topic-by-index), POST /anamnesis/save
 
 #### Frontend (React + Vite, running on http://localhost:5173)
-- **LoginPage** — JWT stored in memory (not localStorage)
-- **PatientsPage** — list + add patient form
-- **PatientDetailPage** — medical records, AI diagnosis form, Anamnesis tab (chat + saved records)
-- **RandevuAlPage** — full appointment booking flow (see below)
-- **RandevularimPage** — lists user's appointments with status badges (Onay Bekliyor / Onaylandı / Tamamlandı / İptal Edildi)
-- **AnamnesisChat** (component) — embedded chatbot used inside RandevuAlPage
+
+**Shared / Auth**
+- **LoginPage** — JWT stored in memory (not localStorage); decodes role from JWT via parseJwt()
+- **RegisterPage** — name, email, password, role toggle (Hasta Sahibi/Klinik), conditional clinicName field
+- **AuthContext** — stores userId + role (OWNER|CLINIC); role-conditional route guards in App.tsx
+
+**OWNER panel** (OwnerRoute guard — CLINIC users redirected to /patients)
+- **PatientsPage** — "Evcil Hayvanlarım"; list + add patient form (basic fields only)
+- **PatientDetailPage** — medical records, AI diagnosis form; shows anamnesis records only for CLINIC role
+- **RandevularimPage** — lists own appointments with status badges
+- **RandevuAlPage** — full booking flow: Leaflet map → patient select → anamnesis chatbot → time slot picker → POST /appointments
+
+**CLINIC panel** (ClinicRoute guard — OWNER users redirected to /patients)
+- **PatientsPage** — "Hastalar"; add patient includes optional 7-topic anamnesis form + Hekim Notu; delete patient button with custom confirm modal; cascade delete on backend
+- **PatientDetailPage** — shows anamnesis MedicalRecords in collapsible accordion (AnamnesisStructured); shows Hekim Notu if set
+- **RandevuIstekleriPage** — PENDING appointments; approve (→ SCHEDULED) or reject (→ CANCELLED); shows AnamnesisStructured per card
+- **TakvimPage** — monthly calendar grid (Mon-Sun, Monday-start); SCHEDULED appointments only; click → modal with owner name, patient info, AnamnesisStructured; cancel button (→ CANCELLED)
+
+**Components**
+- **AnamnesisChat** — chatbot UI; completion token stripped via regex; stripToken is bracket-agnostic
+- **AnamnesisStructured** — parses 7-topic anamnesis data (chatbot or manual) into key-value display; shared by PatientDetailPage, TakvimPage modal, RandevuIstekleriPage cards; no closing summary shown
+- **Layout** — role-conditional sidebar nav (OWNER: Evcil Hayvanlarım / Randevularım / Randevu Al; CLINIC: Hastalar / Randevu İstekleri / Takvim)
 
 All UI text is in **Turkish**.
 
@@ -43,7 +60,7 @@ All UI text is in **Turkish**.
 1. **Klinik Seç** — Leaflet.js map with browser geolocation; Overpass API fetches nearby vet clinics (10 km); user clicks a marker to select a clinic
 2. **Hasta Seç** — dropdown of user's registered patients (fetched from GET /patients)
 3. **Anamnez** — embedded `AnamnesisChat` component runs the chatbot session for the selected patient; on completion (`[ANAMNESIS_COMPLETE]`), the summary is saved via POST /anamnesis/save
-4. **Saat Seç** — mock time slots (hardcoded list); user picks a slot
+4. **Saat Seç** — 5 hardcoded candidate time slots; before display, fetches existing appointments and filters out slots already taken (status PENDING or SCHEDULED) for the same clinicName; shows however many remain (can be < 5); empty state if all taken
 5. **Randevu Oluştur** — POST /appointments with status `PENDING`; success screen shown
 
 ---
@@ -56,16 +73,26 @@ File: `backend/src/anamnesis/anamnesis.service.ts`
 |---|---|
 | Model | `llama-3.1-8b-instant` |
 | Temperature | `0.3` |
-| max_tokens | `150` (normal) / `400` (forceFinish) |
-| forceFinish trigger | user message count in history ≥ 7 |
-| History sent to Groq | last 4 messages (slice(-4)) |
+| max_tokens | `150` (normal) / `400` (summary phase) |
+| Topic control | Deterministic — `topicIndex = effectiveCount` (not LLM-driven) |
+| effectiveCount | `userMessageCount − irrelevantInHistory` (irrelevant answers don't advance topic) |
+| Summary trigger | `topicIndex >= 7` (all topics answered) |
+| History sent to Groq | `[system, currentMessage]` normally; `[system, fullHistory, currentMessage]` in summary phase |
 | Timeout | 45 seconds (AbortController) |
-| Completion signal | `[ANAMNESIS_COMPLETE]` token in reply |
+| Completion signal | `[ANAMNESIS_COMPLETE]` token; detected with `/ANAMNESIS_COMPLETE/i`; stripped with bracket-agnostic regex before returning |
 | Content-Type | `application/json; charset=utf-8` |
 
-**forceFinish behavior:** when ≥7 user messages have been sent, system prompt appends: "This is the final question or summary — you MUST provide the summary now and end with [ANAMNESIS_COMPLETE]." and max_tokens is raised to 400.
+**Deterministic topic tracking:** `TOPICS[topicIndex]` is selected by the backend, not the LLM. 7 topics: chief_complaint → duration → severity → appetite → water_intake → behavior → vaccination. Each has a `hint` (English, for LLM prompt) and a `reask` (Turkish, for hardcoded bypass).
 
-**Irrelevant answer handling:** system prompt instructs model to re-ask the same question politely instead of advancing topics if the answer is irrelevant or rude.
+**Irrelevant/rude answer handling (hard bypass):** `isIrrelevantAnswer()` checks:
+- `RUDE_WORDS` set (word-level match): `sus`, `kes`, `lan`, `salak`, `siktir`, `defol`, `sanane`
+- `RUDE_SUBSTRINGS` list (substring match): `bırak beni`, `sus lan`, `siktir`, `whatever`, `shut up`, `yok bişey`
+- Numeric-only answers (`/^\d+(\s*(gün|saat|kilo|kg|ay|yıl|hafta|dakika|dk))?$/`) are **always valid** — never irrelevant
+- No length-based heuristic (removed to avoid flagging "2", "ok", "az")
+
+When `isCurrentIrrelevant && !isSummary`: Groq is **not called at all**. Returns hardcoded Turkish re-ask: `"Anlayışınız için teşekkürler, ama bu bilgiye gerçekten ihtiyacım var. [TOPICS[topicIndex].reask]"`. This prevents any LLM meta-commentary or topic skipping.
+
+**Known edge-case:** some loop scenarios may remain with borderline inputs not in the blocklist. Core flow (valid answers, clear profanity) works reliably. Deprioritized for MVP.
 
 ---
 
@@ -143,15 +170,16 @@ Use `backend/.env.example` as template. `.env` is gitignored and must be recreat
 
 ### Anamnesis chat
 - History role mapping: DTO uses `'user' | 'model'` (Gemini legacy); service maps `'model'` → `'assistant'` for Groq
-- `[ANAMNESIS_COMPLETE]` token signals end of session
-- History sliced to last 4 messages before sending to Groq
-- Timeout: 45 seconds (AbortController)
-- forceFinish triggers at ≥7 user messages — appends forced-summary instruction to system prompt and raises max_tokens to 400
+- `[ANAMNESIS_COMPLETE]` token signals end of session; detected bracket-agnostically (`/ANAMNESIS_COMPLETE/i`); stripped from reply before returning to frontend
+- Frontend `AnamnesisChat.tsx` also strips via regex as backup: `/[\[(]?ANAMNESIS_COMPLETE[\])]?/gi`
+- Topic index is controlled by backend (deterministic), not LLM
+- Irrelevant answers: hard-bypass Groq, return hardcoded Turkish re-ask
+- Numeric answers always pass (guard before blocklist check)
 - See ANAMNESIS CHATBOT FINAL CONFIG section above for full parameter table
 
 ### Last git push
-- Hash: `b8b2f1b` — "Fix anamnesis chatbot stability: switch to llama-3.1-8b-instant, lower temperature, add forceFinish safeguard against loops"
 - Repo: https://github.com/bariss9/vetclinic-mvp (private)
+- See `git log --oneline` for current hash
 
 ---
 

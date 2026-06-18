@@ -2,9 +2,10 @@ import { useState, useEffect } from 'react';
 import type { FormEvent } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../api';
-import type { PatientDetail, MedicalRecord, AiResult } from '../api';
+import type { PatientDetail, MedicalRecord, AiResult, AnamnesisData } from '../api';
 import Layout from '../components/Layout';
-import AnamnesisChat from '../components/AnamnesisChat';
+import AnamnesisStructured from '../components/AnamnesisStructured';
+import { useAuth } from '../AuthContext';
 
 const RISK_BADGE: Record<string, string> = {
   low:    'badge badge-risk-low',
@@ -25,21 +26,30 @@ function speciesIcon(s: string) {
   return SPECIES_EMOJI[s.toLowerCase()] ?? '🐾';
 }
 
-type Tab = 'records' | 'anamnesis';
-
 export default function PatientDetailPage() {
   const { id }     = useParams<{ id: string }>();
   const navigate   = useNavigate();
+  const { role }   = useAuth();
   const [patient, setPatient]     = useState<PatientDetail | null>(null);
   const [loading, setLoading]     = useState(true);
   const [error, setError]         = useState('');
-  const [tab, setTab]             = useState<Tab>('records');
   const [diagnosing, setDiagnosing] = useState<number | null>(null);
+  const [deleting, setDeleting]       = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [symptoms, setSymptoms]   = useState('');
   const [durationDays, setDurationDays] = useState('1');
   const [severity, setSeverity]   = useState<'mild' | 'moderate' | 'severe'>('mild');
   const [diagError, setDiagError] = useState('');
   const [results, setResults]     = useState<Record<number, AiResult>>({});
+  const [expandedAnamnesis, setExpandedAnamnesis] = useState<Set<number>>(new Set());
+
+  function toggleAnamnesis(id: number) {
+    setExpandedAnamnesis(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }
 
   useEffect(() => { load(); }, [id]);
 
@@ -55,6 +65,19 @@ export default function PatientDetailPage() {
       setError(err instanceof Error ? err.message : 'Hasta yüklenemedi');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function confirmDelete() {
+    if (!patient) return;
+    setShowDeleteModal(false);
+    setDeleting(true);
+    try {
+      await api.deletePatient(patient.id);
+      navigate('/patients');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Silme işlemi başarısız');
+      setDeleting(false);
     }
   }
 
@@ -106,7 +129,10 @@ export default function PatientDetailPage() {
     );
   }
 
-  const anamnesisRecords = patient.medicalRecords.filter(r => r.anamnesis !== null);
+  const medicalRecords   = patient.medicalRecords.filter(r => !r.anamnesis);
+  const anamnesisRecords = role === 'CLINIC'
+    ? patient.medicalRecords.filter(r => r.anamnesis !== null)
+    : [];
 
   return (
     <Layout>
@@ -120,6 +146,11 @@ export default function PatientDetailPage() {
           </button>
           <h1>Hasta Detayı</h1>
         </div>
+        {role === 'CLINIC' && (
+          <button className="btn-danger" onClick={() => setShowDeleteModal(true)} disabled={deleting}>
+            {deleting ? 'Siliniyor…' : 'Hastayı Sil'}
+          </button>
+        )}
       </div>
 
       <div className="page-body">
@@ -135,185 +166,180 @@ export default function PatientDetailPage() {
           </div>
         </div>
 
-        {/* ── Sekmeler ── */}
-        <div className="tab-bar">
-          <button
-            className={`tab-btn${tab === 'records' ? ' tab-active' : ''}`}
-            onClick={() => setTab('records')}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-              <polyline points="14 2 14 8 20 8"/>
-            </svg>
-            Tıbbi Kayıtlar
-            <span className="tab-count">{patient.medicalRecords.filter(r => !r.anamnesis).length}</span>
-          </button>
-          <button
-            className={`tab-btn${tab === 'anamnesis' ? ' tab-active' : ''}`}
-            onClick={() => setTab('anamnesis')}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-            </svg>
-            Anamnez
-            {anamnesisRecords.length > 0 && (
-              <span className="tab-count">{anamnesisRecords.length}</span>
-            )}
-          </button>
-        </div>
-
-        {/* ── Kayıtlar sekmesi ── */}
-        {tab === 'records' && (
-          <>
-            {patient.medicalRecords.filter(r => !r.anamnesis).length === 0 && (
-              <div className="empty-state">
-                <div className="empty-state-icon">📋</div>
-                <p className="empty-state-text">Bu hasta için henüz tıbbi kayıt yok.</p>
-              </div>
-            )}
-
-            {patient.medicalRecords.filter(r => !r.anamnesis).map(record => {
-              const result = results[record.id];
-              const busy   = diagnosing === record.id;
-
-              return (
-                <div key={record.id} className="card record-card">
-                  <div className="record-header">
-                    <span className="record-id">Kayıt #{record.id}</span>
-                    <span className="record-date">{new Date(record.createdAt).toLocaleDateString('tr-TR', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
-                  </div>
-
-                  <div className="record-symptoms-row">
-                    {record.symptoms.map(s => (
-                      <span key={s} className="symptom-chip">{s}</span>
-                    ))}
-                  </div>
-
-                  {record.notes && (
-                    <p className="record-notes-text">{record.notes}</p>
-                  )}
-
-                  {result ? (
-                    <div className="ai-result-block">
-                      <div className="ai-result-top">
-                        <span className="badge badge-ai">YZ Destekli</span>
-                        {result.urgent && <span className="badge badge-urgent">ACİL</span>}
-                        <span className={RISK_BADGE[result.riskLevel]}>
-                          {RISK_LABEL[result.riskLevel]}
-                        </span>
-                        <div className="confidence-pill">
-                          <div className="confidence-bar">
-                            <div className="confidence-fill" style={{ width: `${result.confidenceScore}%` }} />
-                          </div>
-                          Güven Skoru: {result.confidenceScore}%
-                        </div>
-                      </div>
-
-                      <div className="ai-result-cols">
-                        <div>
-                          <p className="ai-col-title">Olası Hastalıklar</p>
-                          <ul className="ai-list">
-                            {result.possibleDiseases.map(d => <li key={d}>{d}</li>)}
-                          </ul>
-                        </div>
-                        <div>
-                          <p className="ai-col-title">Öneriler</p>
-                          <ul className="ai-list">
-                            {result.recommendations.map(r => <li key={r}>{r}</li>)}
-                          </ul>
-                        </div>
-                      </div>
-
-                      <p className="advisory-strip">
-                        Yalnızca YZ destekli öneri — tıbbi tanı değildir. Klinik kararlar vermeden önce her zaman lisanslı bir veterinerle görüşün.
-                      </p>
-                    </div>
-                  ) : (
-                    <div className="diagnose-form-block">
-                      <p className="diagnose-form-title">AI Tanı Çalıştır</p>
-                      <form className="form-body" onSubmit={e => handleDiagnose(e, record)}>
-                        <div className="form-grid">
-                          <div className="field" style={{ gridColumn: '1 / -1' }}>
-                            <label>Semptomları geçersiz kıl (virgülle ayırın, kayıttakileri kullanmak için boş bırakın)</label>
-                            <input
-                              value={symptoms}
-                              onChange={e => setSymptoms(e.target.value)}
-                              placeholder={record.symptoms.join(', ')}
-                            />
-                          </div>
-                          <div className="field">
-                            <label>Süre (gün)</label>
-                            <input
-                              type="number"
-                              min="1"
-                              value={durationDays}
-                              onChange={e => setDurationDays(e.target.value)}
-                              required
-                            />
-                          </div>
-                          <div className="field">
-                            <label>Şiddet</label>
-                            <select
-                              value={severity}
-                              onChange={e => setSeverity(e.target.value as 'mild' | 'moderate' | 'severe')}
-                            >
-                              <option value="mild">Hafif</option>
-                              <option value="moderate">Orta</option>
-                              <option value="severe">Ağır</option>
-                            </select>
-                          </div>
-                        </div>
-                        {diagError && <p className="error-text">{diagError}</p>}
-                        <div className="form-actions">
-                          <button type="submit" className="btn-secondary" disabled={busy}>
-                            {busy ? 'Analiz ediliyor…' : '✦ AI Tanı Çalıştır'}
-                          </button>
-                        </div>
-                      </form>
+        {/* ── Anamnez Kayıtları (CLINIC only) ── */}
+        {anamnesisRecords.map(record => {
+          const open = expandedAnamnesis.has(record.id);
+          return (
+            <div key={record.id} className="card record-card">
+              <button
+                className="anamnesis-accordion-header"
+                onClick={() => toggleAnamnesis(record.id)}
+                aria-expanded={open}
+              >
+                <span className="record-id">
+                  <span className="badge badge-ai" style={{ fontSize: '.7rem', marginRight: '.4rem' }}>Anamnez Kaydı</span>
+                  #{record.id}
+                </span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '.75rem' }}>
+                  <span className="record-date">
+                    {new Date(record.createdAt).toLocaleDateString('tr-TR', { day: 'numeric', month: 'short', year: 'numeric' })}
+                  </span>
+                  <svg
+                    className={`accordion-chevron${open ? ' accordion-chevron-open' : ''}`}
+                    width="14" height="14" viewBox="0 0 24 24"
+                    fill="none" stroke="currentColor" strokeWidth="2.5"
+                    strokeLinecap="round" strokeLinejoin="round"
+                  >
+                    <polyline points="6 9 12 15 18 9" />
+                  </svg>
+                </span>
+              </button>
+              {open && (
+                <div className="anamnesis-accordion-body">
+                  <AnamnesisStructured data={record.anamnesis as AnamnesisData} />
+                  {record.notes && record.notes !== 'Collected via anamnesis chat' && (
+                    <div className="hekim-notu-block">
+                      <p className="hekim-notu-label">Hekim Notu</p>
+                      <p className="hekim-notu-text">{record.notes}</p>
                     </div>
                   )}
                 </div>
-              );
-            })}
-          </>
-        )}
-
-        {/* ── Anamnez sekmesi ── */}
-        {tab === 'anamnesis' && (
-          <>
-            {/* Kaydedilen anamnez kayıtları */}
-            {anamnesisRecords.length > 0 && (
-              <div style={{ marginBottom: '1.5rem' }}>
-                <p className="records-section-title" style={{ marginBottom: '.75rem' }}>Kaydedilen Anamnezler</p>
-                {anamnesisRecords.map(r => (
-                  <div key={r.id} className="card anamnesis-saved-card">
-                    <div className="record-header">
-                      <span className="record-id">Anamnez #{r.id}</span>
-                      <span className="record-date">{new Date(r.createdAt).toLocaleDateString('tr-TR', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
-                    </div>
-                    <div className="anamnesis-summary-text">
-                      {(r.anamnesis as { summary: string }).summary
-                        .split('\n')
-                        .map((line, i) => <p key={i}>{line}</p>)}
-                    </div>
-                  </div>
-                ))}
-                <div className="anamnesis-divider">
-                  <span>Aşağıdan yeni bir anamnez başlatın</span>
-                </div>
-              </div>
-            )}
-
-            {/* Canlı sohbet */}
-            <div className="card chat-card">
-              <AnamnesisChat
-                patientId={patient.id}
-                onSaved={load}
-              />
+              )}
             </div>
-          </>
+          );
+        })}
+
+        {/* ── Tıbbi Kayıtlar ── */}
+        {medicalRecords.length === 0 && anamnesisRecords.length === 0 && (
+          <div className="empty-state">
+            <div className="empty-state-icon">📋</div>
+            <p className="empty-state-text">Bu hasta için henüz tıbbi kayıt yok.</p>
+          </div>
         )}
+
+        {medicalRecords.map(record => {
+          const result = results[record.id];
+          const busy   = diagnosing === record.id;
+
+          return (
+            <div key={record.id} className="card record-card">
+              <div className="record-header">
+                <span className="record-id">Kayıt #{record.id}</span>
+                <span className="record-date">{new Date(record.createdAt).toLocaleDateString('tr-TR', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
+              </div>
+
+              <div className="record-symptoms-row">
+                {record.symptoms.map(s => (
+                  <span key={s} className="symptom-chip">{s}</span>
+                ))}
+              </div>
+
+              {record.notes && (
+                <p className="record-notes-text">{record.notes}</p>
+              )}
+
+              {result ? (
+                <div className="ai-result-block">
+                  <div className="ai-result-top">
+                    <span className="badge badge-ai">YZ Destekli</span>
+                    {result.urgent && <span className="badge badge-urgent">ACİL</span>}
+                    <span className={RISK_BADGE[result.riskLevel]}>
+                      {RISK_LABEL[result.riskLevel]}
+                    </span>
+                    <div className="confidence-pill">
+                      <div className="confidence-bar">
+                        <div className="confidence-fill" style={{ width: `${result.confidenceScore}%` }} />
+                      </div>
+                      Güven Skoru: {result.confidenceScore}%
+                    </div>
+                  </div>
+
+                  <div className="ai-result-cols">
+                    <div>
+                      <p className="ai-col-title">Olası Hastalıklar</p>
+                      <ul className="ai-list">
+                        {result.possibleDiseases.map(d => <li key={d}>{d}</li>)}
+                      </ul>
+                    </div>
+                    <div>
+                      <p className="ai-col-title">Öneriler</p>
+                      <ul className="ai-list">
+                        {result.recommendations.map(r => <li key={r}>{r}</li>)}
+                      </ul>
+                    </div>
+                  </div>
+
+                  <p className="advisory-strip">
+                    Yalnızca YZ destekli öneri — tıbbi tanı değildir. Klinik kararlar vermeden önce her zaman lisanslı bir veterinerle görüşün.
+                  </p>
+                </div>
+              ) : (
+                <div className="diagnose-form-block">
+                  <p className="diagnose-form-title">AI Tanı Çalıştır</p>
+                  <form className="form-body" onSubmit={e => handleDiagnose(e, record)}>
+                    <div className="form-grid">
+                      <div className="field" style={{ gridColumn: '1 / -1' }}>
+                        <label>Semptomları geçersiz kıl (virgülle ayırın, kayıttakileri kullanmak için boş bırakın)</label>
+                        <input
+                          value={symptoms}
+                          onChange={e => setSymptoms(e.target.value)}
+                          placeholder={record.symptoms.join(', ')}
+                        />
+                      </div>
+                      <div className="field">
+                        <label>Süre (gün)</label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={durationDays}
+                          onChange={e => setDurationDays(e.target.value)}
+                          required
+                        />
+                      </div>
+                      <div className="field">
+                        <label>Şiddet</label>
+                        <select
+                          value={severity}
+                          onChange={e => setSeverity(e.target.value as 'mild' | 'moderate' | 'severe')}
+                        >
+                          <option value="mild">Hafif</option>
+                          <option value="moderate">Orta</option>
+                          <option value="severe">Ağır</option>
+                        </select>
+                      </div>
+                    </div>
+                    {diagError && <p className="error-text">{diagError}</p>}
+                    <div className="form-actions">
+                      <button type="submit" className="btn-secondary" disabled={busy}>
+                        {busy ? 'Analiz ediliyor…' : '✦ AI Tanı Çalıştır'}
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
+
+      {showDeleteModal && (
+        <div className="takvim-overlay" onClick={() => setShowDeleteModal(false)}>
+          <div className="takvim-modal" style={{ maxWidth: '420px' }} onClick={e => e.stopPropagation()}>
+            <div className="takvim-modal-header">
+              <h3 className="takvim-modal-title">Hastayı Sil</h3>
+              <button className="takvim-modal-close" onClick={() => setShowDeleteModal(false)}>✕</button>
+            </div>
+            <p style={{ margin: '0 0 1.5rem', lineHeight: 1.5 }}>
+              <strong>{patient?.name}</strong> adlı hastayı silmek istediğinize emin misiniz?
+              Bu işlem geri alınamaz.
+            </p>
+            <div className="takvim-modal-footer">
+              <button className="btn-ghost" onClick={() => setShowDeleteModal(false)}>Vazgeç</button>
+              <button className="btn-danger" onClick={confirmDelete}>Evet, Sil</button>
+            </div>
+          </div>
+        </div>
+      )}
     </Layout>
   );
 }

@@ -7,12 +7,74 @@ const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const GROQ_MODEL = 'llama-3.1-8b-instant';
 const COMPLETION_TOKEN = '[ANAMNESIS_COMPLETE]';
 
-function buildSystemPrompt(species: string, name: string, breed: string, age: number, forceFinish: boolean): string {
-  const base = `You are a veterinary assistant collecting patient history for ${name}, a ${age}-year-old ${species} (${breed}). Ask one short question at a time about these 7 topics in order: 1) chief complaint, 2) duration, 3) severity, 4) appetite, 5) water intake, 6) behavior, 7) vaccination status. Never ask about the same topic twice. Track what has been asked and move to the next topic. After covering all 7 topics, immediately output a brief summary and add ${COMPLETION_TOKEN} at the very end. If the owner's answer is irrelevant, rude, or doesn't address the question (e.g. 'whatever', 'shut up', 'none of your business'), politely ask the same question again in a different way instead of moving to the next topic. Only move to the next topic once you get a relevant answer.`;
-  if (forceFinish) {
-    return `${base} This is the final question or summary — you MUST provide the summary now and end with ${COMPLETION_TOKEN}.`;
+// Standalone rude/dismissive words (word-level match to avoid false positives like "susuz", "kesin")
+const RUDE_WORDS = new Set(['sus', 'kes', 'lan', 'salak', 'siktir', 'defol', 'sanane']);
+
+// Multi-word or unambiguous phrases (substring match is safe here)
+const RUDE_SUBSTRINGS = ['bırak beni', 'sus lan', 'siktir', 'whatever', 'shut up', 'yok bişey'];
+
+function isIrrelevantAnswer(text: string): boolean {
+  const t = text.trim().toLowerCase();
+  // Numbers with optional Turkish units are always valid answers (e.g. "2", "3 gün", "5 kilo")
+  if (/^\d+(\s*(gün|saat|kilo|kg|ay|yıl|hafta|dakika|dk))?$/.test(t)) return false;
+  const words = t.split(/\s+/);
+  if (words.some(w => RUDE_WORDS.has(w))) return true;
+  return RUDE_SUBSTRINGS.some(s => t.includes(s));
+}
+
+const TOPICS = [
+  {
+    key:   'chief_complaint',
+    hint:  'the main health concern or chief complaint',
+    reask: 'Hayvanınızın ana sağlık şikayeti nedir, söyleyebilir misiniz?',
+  },
+  {
+    key:   'duration',
+    hint:  'how long the problem has been going on',
+    reask: 'Bu şikayet ne zamandan beri devam ediyor?',
+  },
+  {
+    key:   'severity',
+    hint:  'how severe the symptoms are (mild, moderate, or severe)',
+    reask: 'Semptomların şiddetini nasıl tanımlarsınız — hafif mi, orta mı, yoksa ağır mı?',
+  },
+  {
+    key:   'appetite',
+    hint:  "the animal's appetite and eating habits",
+    reask: 'Hayvanınızın iştahı nasıl, normal yiyor mu?',
+  },
+  {
+    key:   'water_intake',
+    hint:  "the animal's water intake",
+    reask: 'Hayvanınız yeterince su içiyor mu?',
+  },
+  {
+    key:   'behavior',
+    hint:  'any changes in behavior or activity level',
+    reask: 'Davranışında veya aktivite seviyesinde bir değişiklik fark ettiniz mi?',
+  },
+  {
+    key:   'vaccination',
+    hint:  'vaccination status and history',
+    reask: 'Hayvanınızın aşı durumu hakkında bilgi verebilir misiniz?',
+  },
+] as const;
+
+function buildSystemPrompt(
+  species: string,
+  name: string,
+  breed: string,
+  age: number,
+  topicIndex: number,
+): string {
+  const base = `You are a veterinary assistant collecting patient history for ${name}, a ${age}-year-old ${species} (${breed}). Always respond in Turkish, regardless of what language the owner uses. The owner's answers may be short Turkish words or phrases (e.g. 'halsiz', 'iyi', 'az'). Treat these as valid answers to your question.`;
+
+  if (topicIndex >= TOPICS.length) {
+    return `${base} The owner has answered all questions. Based solely on the conversation history, write a brief clinical summary of all answers and append ${COMPLETION_TOKEN} at the very end. Do not ask any further questions.`;
   }
-  return base;
+
+  const { hint } = TOPICS[topicIndex];
+  return `${base} Ask the owner about: ${hint}. Ask only this one question. Keep it short and friendly. Do not ask about anything else and do not reference topics already discussed.`;
 }
 
 function formatHistory(history: ChatMessageDto[]) {
@@ -35,17 +97,28 @@ export class AnamnesisService {
     if (!apiKey) throw new InternalServerErrorException('GROQ_API_KEY is not configured');
 
     const userMessageCount = dto.history.filter(m => m.role === 'user').length;
-    const forceFinish = userMessageCount >= 7;
+    const irrelevantInHistory = dto.history.filter(m => m.role === 'user' && isIrrelevantAnswer(m.text)).length;
+    const effectiveCount = userMessageCount - irrelevantInHistory;
+    const isCurrentIrrelevant = isIrrelevantAnswer(dto.message);
+    const topicIndex = isCurrentIrrelevant ? Math.max(0, effectiveCount - 1) : effectiveCount;
+    const isSummary = topicIndex >= TOPICS.length;
+
+    // Hard guard: bypass Groq entirely for rude/irrelevant input outside the summary phase.
+    // The LLM never sees the message, so it cannot skip topics or produce meta-commentary.
+    if (isCurrentIrrelevant && !isSummary) {
+      const reply = `Anlayışınız için teşekkürler, ama bu bilgiye gerçekten ihtiyacım var. ${TOPICS[topicIndex].reask}`;
+      return { reply, done: false };
+    }
 
     const body = {
       model: GROQ_MODEL,
       messages: [
-        { role: 'system', content: buildSystemPrompt(patient.species, patient.name, patient.breed, patient.age, forceFinish) },
-        ...formatHistory(dto.history.slice(-4)),
+        { role: 'system', content: buildSystemPrompt(patient.species, patient.name, patient.breed, patient.age, topicIndex) },
+        ...(isSummary ? formatHistory(dto.history) : []),
         { role: 'user', content: dto.message },
       ],
       temperature: 0.3,
-      max_tokens: forceFinish ? 400 : 150,
+      max_tokens: isSummary ? 400 : 150,
     };
 
     const abort = new AbortController();
@@ -84,8 +157,9 @@ export class AnamnesisService {
       choices: Array<{ message: { content: string } }>;
     };
 
-    const reply: string = data.choices?.[0]?.message?.content ?? '';
-    const done = reply.includes(COMPLETION_TOKEN);
+    const rawReply: string = data.choices?.[0]?.message?.content ?? '';
+    const done = /ANAMNESIS_COMPLETE/i.test(rawReply);
+    const reply = rawReply.replace(/[\[(]?ANAMNESIS_COMPLETE[\])]?/gi, '').trim();
 
     return { reply, done };
   }
@@ -98,7 +172,7 @@ export class AnamnesisService {
       data: {
         patientId: dto.patientId,
         symptoms: [],
-        notes: 'Collected via anamnesis chat',
+        notes: dto.notes ?? 'Collected via anamnesis chat',
         anamnesis: dto.anamnesis as Prisma.InputJsonValue,
       },
     });

@@ -8,9 +8,17 @@ export class RegisterDto {
   @MinLength(6)
   password: string;
 
-  @IsEnum(['VET', 'ADMIN'])
+  @IsString()
   @IsOptional()
-  role?: 'VET' | 'ADMIN';
+  name?: string;
+
+  @IsEnum(['OWNER', 'CLINIC'])
+  @IsOptional()
+  role?: 'OWNER' | 'CLINIC';
+
+  @IsString()
+  @IsOptional()
+  clinicName?: string;
 }
 
 export class LoginDto {

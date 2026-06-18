@@ -17,7 +17,7 @@ interface Bubble {
 }
 
 function stripToken(text: string) {
-  return text.replace(COMPLETION_TOKEN, '').trim();
+  return text.replace(/[\[(]?ANAMNESIS_COMPLETE[\])]?/gi, '').trim();
 }
 
 export default function AnamnesisChat({ patientId, onSaved, onComplete }: Props) {

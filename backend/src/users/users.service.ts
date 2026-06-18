@@ -16,8 +16,18 @@ export class UsersService {
     if (existing) throw new ConflictException('Email already in use');
 
     const hashed = await bcrypt.hash(dto.password, 10);
+    const role = dto.role ?? 'OWNER';
+
     const user = await this.prisma.user.create({
-      data: { email: dto.email, password: hashed, role: dto.role ?? 'VET' },
+      data: {
+        email: dto.email,
+        password: hashed,
+        name: dto.name,
+        role,
+        ...(role === 'CLINIC' && dto.clinicName
+          ? { clinic: { create: { name: dto.clinicName } } }
+          : {}),
+      },
       select: { id: true, email: true, role: true, createdAt: true },
     });
 

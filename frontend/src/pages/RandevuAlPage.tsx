@@ -87,6 +87,7 @@ export default function RandevuAlPage() {
   const [anamnesisSummary, setAnamnesisSummary]   = useState('');
   const [slots, setSlots]                         = useState<Slot[]>([]);
   const [selectedSlot, setSelectedSlot]           = useState<Slot | null>(null);
+  const [slotsLoading, setSlotsLoading]           = useState(false);
   const [saving, setSaving]                       = useState(false);
   const [saveError, setSaveError]                 = useState('');
 
@@ -233,6 +234,7 @@ export default function RandevuAlPage() {
     setAnamnesisSummary('');
     setSlots([]);
     setSelectedSlot(null);
+    setSlotsLoading(false);
     setSaving(false);
     setSaveError('');
   }
@@ -245,15 +247,32 @@ export default function RandevuAlPage() {
     setAnamnesisSummary('');
     setSlots([]);
     setSelectedSlot(null);
+    setSlotsLoading(false);
     setSaving(false);
     setSaveError('');
   }
 
-  function handleAnamnesisComplete(history: ChatMessage[], summary: string) {
+  async function handleAnamnesisComplete(history: ChatMessage[], summary: string) {
     setAnamnesisHistory(history);
     setAnamnesisSummary(summary);
-    setSlots(generateSlots());
     setModalStep('slots');
+    setSlotsLoading(true);
+    try {
+      const existing = await api.getAppointments();
+      const takenIsos = new Set(
+        existing
+          .filter(a =>
+            (a.status === 'PENDING' || a.status === 'SCHEDULED') &&
+            a.clinicName === modalClinic!.name,
+          )
+          .map(a => a.date),
+      );
+      setSlots(generateSlots().filter(s => !takenIsos.has(s.iso)));
+    } catch {
+      setSlots(generateSlots());
+    } finally {
+      setSlotsLoading(false);
+    }
   }
 
   async function handleConfirm() {
@@ -426,17 +445,23 @@ export default function RandevuAlPage() {
 
                   <div className="slot-section">
                     <p className="slot-section-label">Uygun Randevu Saatleri</p>
-                    <div className="slot-grid">
-                      {slots.map(s => (
-                        <button
-                          key={s.iso}
-                          className={`slot-btn${selectedSlot?.iso === s.iso ? ' slot-btn--active' : ''}`}
-                          onClick={() => setSelectedSlot(s)}
-                        >
-                          {s.label}
-                        </button>
-                      ))}
-                    </div>
+                    {slotsLoading ? (
+                      <p className="muted-text">Müsait saatler kontrol ediliyor…</p>
+                    ) : slots.length === 0 ? (
+                      <p className="muted-text">Bu klinik için müsait randevu saati bulunmuyor.</p>
+                    ) : (
+                      <div className="slot-grid">
+                        {slots.map(s => (
+                          <button
+                            key={s.iso}
+                            className={`slot-btn${selectedSlot?.iso === s.iso ? ' slot-btn--active' : ''}`}
+                            onClick={() => setSelectedSlot(s)}
+                          >
+                            {s.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   {saveError && (
@@ -446,7 +471,7 @@ export default function RandevuAlPage() {
                   <div className="form-actions" style={{ marginTop: '1.5rem' }}>
                     <button
                       className="btn-primary"
-                      disabled={!selectedSlot || saving}
+                      disabled={!selectedSlot || saving || slotsLoading}
                       onClick={handleConfirm}
                     >
                       {saving ? 'Oluşturuluyor…' : 'Randevuyu Onayla'}
