@@ -40,3 +40,6 @@ generated/prisma/
 
 # Vite local overrides
 *.local
+
+# Temporary one-off migration/utility SQL files
+truncate.sql
