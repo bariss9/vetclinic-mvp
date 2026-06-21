@@ -1,4 +1,4 @@
-import { IsString, IsInt, IsArray, ValidateNested, IsIn, IsObject, IsOptional } from 'class-validator';
+import { IsString, IsInt, IsArray, ValidateNested, IsIn, IsObject, IsOptional, Min, Max } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class ChatMessageDto {
@@ -20,6 +20,21 @@ export class ChatDto {
 
   @IsInt()
   patientId: number;
+}
+
+export class NextQuestionDto {
+  @IsInt()
+  patientId: number;
+}
+
+export class ValidateAnswerDto {
+  @IsInt()
+  @Min(0)
+  @Max(6)
+  questionIndex: number;
+
+  @IsString()
+  answer: string;
 }
 
 export class SaveAnamnesisDto {

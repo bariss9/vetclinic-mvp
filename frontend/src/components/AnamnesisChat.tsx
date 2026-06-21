@@ -9,28 +9,50 @@ interface Props {
   onComplete?: (history: ChatMessage[], summary: string) => void;
 }
 
-const COMPLETION_TOKEN = '[ANAMNESIS_COMPLETE]';
-
 interface Bubble {
   role: 'user' | 'bot';
   text: string;
 }
 
-function stripToken(text: string) {
-  return text.replace(/[\[(]?ANAMNESIS_COMPLETE[\])]?/gi, '').trim();
+interface QAPair {
+  key: string;
+  question: string;
+  answer: string;
+}
+
+function buildHistory(pairs: QAPair[]): ChatMessage[] {
+  return pairs.flatMap(p => [
+    { role: 'model' as const, text: p.question },
+    { role: 'user' as const, text: p.answer },
+  ]);
+}
+
+function buildSummary(pairs: QAPair[]): string {
+  const labels: Record<string, string> = {
+    chief_complaint: 'Ana Şikayet',
+    duration:        'Süre',
+    severity:        'Şiddet',
+    appetite:        'İştah',
+    water_intake:    'Su Tüketimi',
+    behavior:        'Davranış',
+    vaccination:     'Aşı Durumu',
+  };
+  return pairs.map(p => `${labels[p.key] ?? p.key}: ${p.answer}`).join('\n');
 }
 
 export default function AnamnesisChat({ patientId, onSaved, onComplete }: Props) {
-  const [bubbles, setBubbles]   = useState<Bubble[]>([]);
-  const [history, setHistory]   = useState<ChatMessage[]>([]);
-  const [input, setInput]       = useState('');
-  const [loading, setLoading]   = useState(false);
-  const [done, setDone]         = useState(false);
-  const [saving, setSaving]     = useState(false);
-  const [saved, setSaved]       = useState(false);
-  const [error, setError]       = useState('');
-  const [started, setStarted]   = useState(false);
-  const bottomRef               = useRef<HTMLDivElement>(null);
+  const [bubbles, setBubbles]         = useState<Bubble[]>([]);
+  const [questionIndex, setQuestionIndex] = useState(0);
+  const [currentQuestion, setCurrentQuestion] = useState('');
+  const [answers, setAnswers]         = useState<QAPair[]>([]);
+  const [input, setInput]             = useState('');
+  const [loading, setLoading]         = useState(false);
+  const [done, setDone]               = useState(false);
+  const [saving, setSaving]           = useState(false);
+  const [saved, setSaved]             = useState(false);
+  const [error, setError]             = useState('');
+  const [started, setStarted]         = useState(false);
+  const bottomRef                     = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -38,9 +60,9 @@ export default function AnamnesisChat({ patientId, onSaved, onComplete }: Props)
 
   useEffect(() => {
     if (!done || !onComplete) return;
-    const summaryBubble = [...bubbles].reverse().find(b => b.role === 'bot');
-    onComplete(history, summaryBubble?.text ?? '');
-  // onComplete is stable (passed from parent render); bubbles/history are current when done flips
+    const history = buildHistory(answers);
+    const summary = buildSummary(answers);
+    onComplete(history, summary);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [done]);
 
@@ -49,22 +71,13 @@ export default function AnamnesisChat({ patientId, onSaved, onComplete }: Props)
     setLoading(true);
     setError('');
     try {
-      const { reply, done: isDone } = await api.chatAnamnesis({
-        message: 'Merhaba, anamnezi başlatalım.',
-        history: [],
-        patientId,
-      });
-      const cleanReply = stripToken(reply);
-      setBubbles([{ role: 'bot', text: cleanReply }]);
-      setHistory([
-        { role: 'user', text: 'Merhaba, anamnezi başlatalım.' },
-        { role: 'model', text: cleanReply },
-      ]);
-      if (isDone) setDone(true);
+      const { question } = await api.nextQuestion(patientId);
+      setCurrentQuestion(question);
+      setBubbles([{ role: 'bot', text: question }]);
+      setQuestionIndex(0);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Sohbet başlatılamadı';
-      console.error('[AnamnesisChat] startChat failed:', err);
-      setError(msg);
+      setError(err instanceof Error ? err.message : 'Anamnez başlatılamadı');
+      setStarted(false);
     } finally {
       setLoading(false);
     }
@@ -80,18 +93,28 @@ export default function AnamnesisChat({ patientId, onSaved, onComplete }: Props)
     setBubbles(prev => [...prev, { role: 'user', text }]);
     setLoading(true);
 
-    const newHistory: ChatMessage[] = [...history, { role: 'user', text }];
-
     try {
-      const { reply, done: isDone } = await api.chatAnamnesis({
-        message: text,
-        history: history,
-        patientId,
-      });
-      const cleanReply = stripToken(reply);
-      setBubbles(prev => [...prev, { role: 'bot', text: cleanReply }]);
-      setHistory([...newHistory, { role: 'model', text: cleanReply }]);
-      if (isDone) setDone(true);
+      const res = await api.validateAnswer({ questionIndex, answer: text });
+
+      if (res.valid) {
+        const newPair: QAPair = { key: `q${questionIndex}`, question: currentQuestion, answer: text };
+        const newAnswers = [...answers, newPair];
+        setAnswers(newAnswers);
+
+        if (res.done) {
+          const closingMsg = 'Anamnez tamamlandı, teşekkürler!';
+          setBubbles(prev => [...prev, { role: 'bot', text: closingMsg }]);
+          setDone(true);
+        } else {
+          const next = res.nextQuestion ?? '';
+          setBubbles(prev => [...prev, { role: 'bot', text: next }]);
+          setCurrentQuestion(next);
+          setQuestionIndex(res.nextQuestionIndex ?? questionIndex + 1);
+        }
+      } else {
+        const retry = res.retryQuestion ?? currentQuestion;
+        setBubbles(prev => [...prev, { role: 'bot', text: retry }]);
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Mesaj gönderilemedi');
       setBubbles(prev => prev.slice(0, -1));
@@ -104,15 +127,14 @@ export default function AnamnesisChat({ patientId, onSaved, onComplete }: Props)
     setSaving(true);
     setError('');
     try {
-      const summaryBubble = [...bubbles].reverse().find(b => b.role === 'bot');
       const anamnesisData: AnamnesisData = {
-        summary: summaryBubble?.text ?? '',
-        messages: history,
+        summary:     buildSummary(answers),
+        messages:    buildHistory(answers),
         completedAt: new Date().toISOString(),
       };
       await api.saveAnamnesis({ patientId, anamnesis: anamnesisData });
       setSaved(true);
-      onSaved();
+      onSaved?.();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Kaydedilemedi');
     } finally {

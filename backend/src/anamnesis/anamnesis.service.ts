@@ -1,17 +1,38 @@
-import { Injectable, NotFoundException, InternalServerErrorException } from '@nestjs/common';
+import { Injectable, NotFoundException, InternalServerErrorException, BadRequestException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { ChatDto, SaveAnamnesisDto, ChatMessageDto } from './anamnesis.dto';
+import { ChatDto, SaveAnamnesisDto, ChatMessageDto, NextQuestionDto, ValidateAnswerDto } from './anamnesis.dto';
 
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const GROQ_MODEL = 'llama-3.1-8b-instant';
 const COMPLETION_TOKEN = '[ANAMNESIS_COMPLETE]';
+
+const QUESTIONS = [
+  { key: 'chief_complaint', question: 'Hayvanınızın bugün kliniğe gelme sebebi olan ana şikayeti nedir?',           retryQuestion: 'Hayvanınızı bugün kliniğe getirmenizin ana sebebini öğrenebilir miyim?' },
+  { key: 'duration',        question: 'Bu şikayet ne zamandır devam ediyor?',                                        retryQuestion: 'Bu sorun ne zaman başladı, yaklaşık olarak belirtebilir misiniz?' },
+  { key: 'severity',        question: 'Şikayetin şiddeti nasıl — hafif, orta, yoksa ciddi mi?',                     retryQuestion: 'Bu şikayetin hafif mi, orta mı, yoksa ciddi mi olduğunu söyleyebilir misiniz?' },
+  { key: 'appetite',        question: 'Hayvanınızın iştahında bir değişiklik var mı?',                               retryQuestion: 'Hayvanınız eskisi gibi yiyor mu, iştahında bir fark fark ettiniz mi?' },
+  { key: 'water_intake',    question: 'Hayvanınızın su tüketiminde bir değişiklik var mı?',                         retryQuestion: 'Hayvanınızın su içme miktarı normale göre değişti mi?' },
+  { key: 'behavior',        question: 'Hayvanınızın davranışlarında son zamanlarda bir değişiklik fark ettiniz mi?', retryQuestion: 'Hayvanınız son zamanlarda aktivite veya davranış bakımından farklı mı?' },
+  { key: 'vaccination',     question: 'Hayvanınızın aşıları güncel mi?',                                            retryQuestion: 'Hayvanınızın aşı takvimi hakkında bilgi verebilir misiniz?' },
+] as const;
 
 // Standalone rude/dismissive words (word-level match to avoid false positives like "susuz", "kesin")
 const RUDE_WORDS = new Set(['sus', 'kes', 'lan', 'salak', 'siktir', 'defol', 'sanane']);
 
 // Multi-word or unambiguous phrases (substring match is safe here)
 const RUDE_SUBSTRINGS = ['bırak beni', 'sus lan', 'siktir', 'whatever', 'shut up', 'yok bişey'];
+
+// Blocklist for validate-answer — checked before calling Groq
+const VALIDATE_RUDE_WORDS = new Set(['siktir', 'sus', 'kes', 'lan', 'salak', 'sanane', 'defol']);
+const VALIDATE_RUDE_SUBSTRINGS = ['seni ilgilendirmez', 'bırak beni', 'ne alaka', 'sanane', 'karışma'];
+
+function isBlocklisted(text: string): boolean {
+  const t = text.trim().toLowerCase();
+  const words = t.split(/\s+/);
+  if (words.some(w => VALIDATE_RUDE_WORDS.has(w))) return true;
+  return VALIDATE_RUDE_SUBSTRINGS.some(s => t.includes(s));
+}
 
 function isIrrelevantAnswer(text: string): boolean {
   const t = text.trim().toLowerCase();
@@ -162,6 +183,92 @@ export class AnamnesisService {
     const reply = rawReply.replace(/[\[(]?ANAMNESIS_COMPLETE[\])]?/gi, '').trim();
 
     return { reply, done };
+  }
+
+  async nextQuestion(dto: NextQuestionDto) {
+    const patient = await this.prisma.patient.findUnique({ where: { id: dto.patientId } });
+    if (!patient) throw new NotFoundException(`Patient #${dto.patientId} not found`);
+    return { questionIndex: 0, question: QUESTIONS[0].question, totalQuestions: QUESTIONS.length };
+  }
+
+  async validateAnswer(dto: ValidateAnswerDto) {
+    const apiKey = process.env.GROQ_API_KEY;
+    if (!apiKey) throw new InternalServerErrorException('GROQ_API_KEY is not configured');
+
+    const current = QUESTIONS[dto.questionIndex];
+    if (!current) throw new BadRequestException(`Invalid questionIndex: ${dto.questionIndex}`);
+
+    if (isBlocklisted(dto.answer)) {
+      console.log(`[validate] blocklisted answer at q=${dto.questionIndex}: "${dto.answer}"`);
+      return { valid: false, retryQuestion: current.retryQuestion };
+    }
+
+    const body = {
+      model: GROQ_MODEL,
+      messages: [
+        {
+          role: 'system',
+          content: 'You are scoring how relevant a pet owner\'s answer is to a veterinary question. Be LENIENT — pet owners often give short, casual answers (1-3 words) and these should score HIGH if they are topically relevant, even without full sentences. For example, for a question about lethargy or main complaint, answers like \'halsiz\', \'yemiyor\', \'kusuyor\' should score 80+. Only score LOW (under 40) if the answer is completely unrelated, empty, or dismissive (e.g. \'sus\', \'bilmem\', random characters). Output ONLY {"score": N}.',
+        },
+        {
+          role: 'user',
+          content: `Question: ${current.question}\nAnswer: ${dto.answer}`,
+        },
+      ],
+      temperature: 0.1,
+      max_tokens: 20,
+    };
+
+    const abort = new AbortController();
+    const timeout = setTimeout(() => abort.abort(), 15_000);
+
+    let res: Response;
+    try {
+      res = await fetch(GROQ_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json; charset=utf-8',
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify(body),
+        signal: abort.signal,
+      });
+    } catch (err: unknown) {
+      const isTimeout = err instanceof Error && err.name === 'AbortError';
+      throw new InternalServerErrorException(
+        isTimeout ? 'Groq API timed out' : 'Groq API request failed',
+      );
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    const rawBody = await res.text();
+    console.log(`[Groq/validate] q=${dto.questionIndex} status=${res.status} body=${rawBody.slice(0, 200)}`);
+    if (!res.ok) throw new InternalServerErrorException(`Groq API error: ${rawBody}`);
+
+    let score = 0;
+    try {
+      const data = JSON.parse(rawBody) as { choices: Array<{ message: { content: string } }> };
+      const content = data.choices?.[0]?.message?.content ?? '{"score":0}';
+      const match = content.match(/\{[^}]*"score"\s*:\s*(\d+)[^}]*\}/);
+      score = match ? parseInt(match[1], 10) : 0;
+    } catch {
+      score = 0;
+    }
+
+    console.log(`[Groq/validate] q=${dto.questionIndex} score=${score}`);
+
+    if (score >= 55) {
+      const nextIndex = dto.questionIndex + 1;
+      return {
+        valid: true,
+        nextQuestionIndex: nextIndex,
+        nextQuestion: QUESTIONS[nextIndex]?.question ?? null,
+        done: nextIndex >= QUESTIONS.length,
+      };
+    }
+
+    return { valid: false, retryQuestion: current.retryQuestion };
   }
 
   async save(dto: SaveAnamnesisDto) {

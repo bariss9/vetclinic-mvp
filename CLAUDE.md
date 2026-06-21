@@ -12,7 +12,7 @@ The goal is:
 
 ---
 
-## CURRENT PROJECT STATUS (updated 2026-06-18)
+## CURRENT PROJECT STATUS (updated 2026-06-21)
 
 ### Completed — All modules built and working
 
@@ -23,7 +23,7 @@ The goal is:
 - **medical-records** — CRUD, symptoms[], aiResult JSON, anamnesis JSON, notes
 - **appointments** — CRUD, status enum (PENDING/SCHEDULED/COMPLETED/CANCELLED); GET returns full patient + owner info
 - **ai** — POST /ai/diagnose (Anthropic key placeholder, currently returns structured mock)
-- **anamnesis** — POST /anamnesis/chat (Groq LLM, deterministic topic-by-index), POST /anamnesis/save
+- **anamnesis** — POST /anamnesis/next-question (start flow), POST /anamnesis/validate-answer (Groq 0-100 score, threshold 55), POST /anamnesis/chat (legacy, kept), POST /anamnesis/save
 
 #### Frontend (React + Vite, running on http://localhost:5173)
 
@@ -45,7 +45,7 @@ The goal is:
 - **TakvimPage** — monthly calendar grid (Mon-Sun, Monday-start); SCHEDULED appointments only; click → modal with owner name, patient info, AnamnesisStructured; cancel button (→ CANCELLED)
 
 **Components**
-- **AnamnesisChat** — chatbot UI; completion token stripped via regex; stripToken is bracket-agnostic
+- **AnamnesisChat** — chatbot UI; now uses validation-based flow (next-question + validate-answer); no ANAMNESIS_COMPLETE token needed
 - **AnamnesisStructured** — parses 7-topic anamnesis data (chatbot or manual) into key-value display; shared by PatientDetailPage, TakvimPage modal, RandevuIstekleriPage cards; no closing summary shown
 - **Layout** — role-conditional sidebar nav (OWNER: Evcil Hayvanlarım / Randevularım / Randevu Al; CLINIC: Hastalar / Randevu İstekleri / Takvim)
 
@@ -59,40 +59,71 @@ All UI text is in **Turkish**.
 
 1. **Klinik Seç** — Leaflet.js map with browser geolocation; Overpass API fetches nearby vet clinics (10 km); user clicks a marker to select a clinic
 2. **Hasta Seç** — dropdown of user's registered patients (fetched from GET /patients)
-3. **Anamnez** — embedded `AnamnesisChat` component runs the chatbot session for the selected patient; on completion (`[ANAMNESIS_COMPLETE]`), the summary is saved via POST /anamnesis/save
+3. **Anamnez** — embedded `AnamnesisChat` component runs the validation-based flow: POST /anamnesis/next-question → 7 fixed questions one by one; each answer sent to POST /anamnesis/validate-answer; on `done: true`, onComplete callback fires and summary is saved via POST /anamnesis/save
 4. **Saat Seç** — 5 hardcoded candidate time slots; before display, fetches existing appointments and filters out slots already taken (status PENDING or SCHEDULED) for the same clinicName; shows however many remain (can be < 5); empty state if all taken
 5. **Randevu Oluştur** — POST /appointments with status `PENDING`; success screen shown
 
 ---
 
-## ANAMNESIS CHATBOT FINAL CONFIG
+## ANAMNESIS VALIDATION ARCHITECTURE (current)
 
 File: `backend/src/anamnesis/anamnesis.service.ts`
+
+### New endpoint flow (used by frontend)
+
+| Endpoint | Input | Output |
+|---|---|---|
+| POST /anamnesis/next-question | `{ patientId }` | `{ questionIndex: 0, question, totalQuestions: 7 }` |
+| POST /anamnesis/validate-answer | `{ questionIndex, answer }` | valid → `{ valid: true, nextQuestionIndex, nextQuestion, done }` / invalid → `{ valid: false, retryQuestion }` |
+
+### Fixed 7 questions (QUESTIONS array)
+
+| # | key | Soru |
+|---|---|---|
+| 0 | chief_complaint | Hayvanınızın bugün kliniğe gelme sebebi olan ana şikayeti nedir? |
+| 1 | duration | Bu şikayet ne zamandır devam ediyor? |
+| 2 | severity | Şikayetin şiddeti nasıl — hafif, orta, yoksa ciddi mi? |
+| 3 | appetite | Hayvanınızın iştahında bir değişiklik var mı? |
+| 4 | water_intake | Hayvanınızın su tüketiminde bir değişiklik var mı? |
+| 5 | behavior | Hayvanınızın davranışlarında son zamanlarda bir değişiklik fark ettiniz mi? |
+| 6 | vaccination | Hayvanınızın aşıları güncel mi? |
+
+Each entry also has a `retryQuestion` (hardcoded Turkish rephrase) used when score < 55.
+
+### Groq validation call parameters
 
 | Parameter | Value |
 |---|---|
 | Model | `llama-3.1-8b-instant` |
-| Temperature | `0.3` |
-| max_tokens | `150` (normal) / `400` (summary phase) |
-| Topic control | Deterministic — `topicIndex = effectiveCount` (not LLM-driven) |
-| effectiveCount | `userMessageCount − irrelevantInHistory` (irrelevant answers don't advance topic) |
-| Summary trigger | `topicIndex >= 7` (all topics answered) |
-| History sent to Groq | `[system, currentMessage]` normally; `[system, fullHistory, currentMessage]` in summary phase |
-| Timeout | 45 seconds (AbortController) |
-| Completion signal | `[ANAMNESIS_COMPLETE]` token; detected with `/ANAMNESIS_COMPLETE/i`; stripped with bracket-agnostic regex before returning |
-| Content-Type | `application/json; charset=utf-8` |
+| Temperature | `0.1` |
+| max_tokens | `20` |
+| Timeout | 15 seconds (AbortController) |
+| Score threshold | `>= 55` = valid, `< 55` = invalid/retry |
+| System prompt | Lenient: short topical answers (1-3 words like "halsiz", "yemiyor") score 80+; only score LOW if completely unrelated, empty, or dismissive |
+| Response format | `{"score": N}` — parsed with regex to handle any Groq markdown wrapping |
 
-**Deterministic topic tracking:** `TOPICS[topicIndex]` is selected by the backend, not the LLM. 7 topics: chief_complaint → duration → severity → appetite → water_intake → behavior → vaccination. Each has a `hint` (English, for LLM prompt) and a `reask` (Turkish, for hardcoded bypass).
+### Blocklist (checked BEFORE calling Groq)
 
-**Irrelevant/rude answer handling (hard bypass):** `isIrrelevantAnswer()` checks:
-- `RUDE_WORDS` set (word-level match): `sus`, `kes`, `lan`, `salak`, `siktir`, `defol`, `sanane`
-- `RUDE_SUBSTRINGS` list (substring match): `bırak beni`, `sus lan`, `siktir`, `whatever`, `shut up`, `yok bişey`
-- Numeric-only answers (`/^\d+(\s*(gün|saat|kilo|kg|ay|yıl|hafta|dakika|dk))?$/`) are **always valid** — never irrelevant
-- No length-based heuristic (removed to avoid flagging "2", "ok", "az")
+- `VALIDATE_RUDE_WORDS` (word-level): `siktir`, `sus`, `kes`, `lan`, `salak`, `sanane`, `defol`
+- `VALIDATE_RUDE_SUBSTRINGS` (substring): `seni ilgilendirmez`, `bırak beni`, `ne alaka`, `sanane`, `karışma`
 
-When `isCurrentIrrelevant && !isSummary`: Groq is **not called at all**. Returns hardcoded Turkish re-ask: `"Anlayışınız için teşekkürler, ama bu bilgiye gerçekten ihtiyacım var. [TOPICS[topicIndex].reask]"`. This prevents any LLM meta-commentary or topic skipping.
+If blocklist matches → skip Groq entirely, return `{ valid: false, retryQuestion }` immediately.
 
-**Known edge-case:** some loop scenarios may remain with borderline inputs not in the blocklist. Core flow (valid answers, clear profanity) works reliably. Deprioritized for MVP.
+### Frontend flow (AnamnesisChat.tsx)
+
+1. Start: call `next-question` → display first question as bot bubble
+2. User types answer → call `validate-answer`
+3. While waiting: typing indicator shown
+4. `valid: true && !done` → show nextQuestion, advance index
+5. `valid: true && done` → show "Anamnez tamamlandı, teşekkürler!", fire `onComplete(history, summary)`
+6. `valid: false` → show `retryQuestion` bubble, same index (no advance)
+7. `onComplete` builds `ChatMessage[]` history + plain-text summary from Q&A pairs for RandevuAlPage
+
+### Legacy endpoints (kept, not used by frontend)
+- POST /anamnesis/chat — old free-form Groq chat (LLM-driven, ANAMNESIS_COMPLETE token)
+- These remain for reference; will be removed after validation flow is confirmed stable
+
+**Loop/stability issue: ÇÖZÜLDÜ** — old architecture had LLM-driven topic advancement causing loops. New architecture is fully deterministic: backend controls question index, Groq only scores relevance (0-100), no free-form generation in the main flow.
 
 ---
 
@@ -168,14 +199,14 @@ Use `backend/.env.example` as template. `.env` is gitignored and must be recreat
 - After schema changes: run `npx prisma generate` separately from `npx prisma db push` — db push does NOT regenerate the TS client.
 - Config file: `prisma/prisma.config.ts` (Prisma 7 style — `url` goes here, not in schema.prisma)
 
-### Anamnesis chat
-- History role mapping: DTO uses `'user' | 'model'` (Gemini legacy); service maps `'model'` → `'assistant'` for Groq
-- `[ANAMNESIS_COMPLETE]` token signals end of session; detected bracket-agnostically (`/ANAMNESIS_COMPLETE/i`); stripped from reply before returning to frontend
-- Frontend `AnamnesisChat.tsx` also strips via regex as backup: `/[\[(]?ANAMNESIS_COMPLETE[\])]?/gi`
-- Topic index is controlled by backend (deterministic), not LLM
-- Irrelevant answers: hard-bypass Groq, return hardcoded Turkish re-ask
-- Numeric answers always pass (guard before blocklist check)
-- See ANAMNESIS CHATBOT FINAL CONFIG section above for full parameter table
+### Anamnesis validation flow
+- Frontend calls `POST /anamnesis/next-question` once to start, then `POST /anamnesis/validate-answer` per answer
+- Backend holds all question state — frontend only tracks `questionIndex` (0-6)
+- Groq is called only for validation scoring (temp 0.1, max_tokens 20) — not for question generation
+- Blocklist checked before Groq: rude/dismissive answers short-circuit immediately
+- `onComplete(history, summary)` callback builds `ChatMessage[]` + plain-text summary from Q&A pairs
+- Legacy `POST /anamnesis/chat` (old free-form flow) is still present in backend but unused by frontend
+- See ANAMNESIS VALIDATION ARCHITECTURE section above for full parameter table
 
 ### Last git push
 - Repo: https://github.com/bariss9/vetclinic-mvp (private)

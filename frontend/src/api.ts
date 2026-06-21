@@ -49,6 +49,12 @@ export const api = {
   chatAnamnesis: (data: { message: string; history: ChatMessage[]; patientId: number }) =>
     req<ChatResponse>('POST', '/anamnesis/chat', data),
 
+  nextQuestion: (patientId: number) =>
+    req<NextQuestionResponse>('POST', '/anamnesis/next-question', { patientId }),
+
+  validateAnswer: (data: { questionIndex: number; answer: string }) =>
+    req<ValidateAnswerResponse>('POST', '/anamnesis/validate-answer', data),
+
   saveAnamnesis: (data: { patientId: number; anamnesis: object; notes?: string }) =>
     req<MedicalRecord>('POST', '/anamnesis/save', data),
 
@@ -94,6 +100,20 @@ export interface ChatMessage {
 export interface ChatResponse {
   reply: string;
   done: boolean;
+}
+
+export interface NextQuestionResponse {
+  questionIndex: number;
+  question: string;
+  totalQuestions: number;
+}
+
+export interface ValidateAnswerResponse {
+  valid: boolean;
+  nextQuestionIndex?: number;
+  nextQuestion?: string | null;
+  done?: boolean;
+  retryQuestion?: string;
 }
 
 export interface AnamnesisData {
