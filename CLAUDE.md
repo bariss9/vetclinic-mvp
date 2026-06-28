@@ -167,7 +167,7 @@ PostgreSQL is NOT synced via git — each machine needs its own local instance.
   ```
   pg_ctl start -D "C:\Program Files\PostgreSQL\18\data"
   ```
-- First-time setup done 2026-06-17: initdb → pg_ctl start → CREATE DATABASE vetclinic → ALTER USER postgres PASSWORD 'postgres' → npx prisma db push
+- First-time setup done 2026-06-17: initdb (with `--locale=C` — Windows Türkçe locale PostgreSQL'i kırıyor) → pg_ctl start → CREATE DATABASE vetclinic → ALTER USER postgres PASSWORD 'postgres' → npx prisma migrate dev
 
 **Both machines:**
 - Connection string: `postgresql://postgres:postgres@localhost:5432/vetclinic`
@@ -178,7 +178,7 @@ PostgreSQL is NOT synced via git — each machine needs its own local instance.
 3. `CREATE DATABASE vetclinic;`
 4. `ALTER USER postgres WITH PASSWORD 'postgres';`
 5. Clone repo from GitHub: `git clone https://github.com/bariss9/vetclinic-mvp.git` (private)
-6. `cd backend && npm install && npx prisma generate && npx prisma db push`
+6. `cd backend && npm install && npx prisma generate && npx prisma migrate deploy`
 7. `cd ../frontend && npm install`
 8. Create `backend/.env` from `backend/.env.example` — fill in real GROQ_API_KEY
 9. `cd backend && npm run start:dev` then `cd frontend && npm run dev`
@@ -196,7 +196,11 @@ Use `backend/.env.example` as template. `.env` is gitignored and must be recreat
 `import 'dotenv/config'` MUST be the first line of `main.ts` — without it Prisma connects as the OS user ("Barış") and fails with P1010/ECONNREFUSED.
 
 ### Prisma
-- After schema changes: run `npx prisma generate` separately from `npx prisma db push` — db push does NOT regenerate the TS client.
+- Şema yönetimi **migration tabanlı** — `db push` KULLANILMAZ.
+- İlk migration: `20260628131955_init` (prisma/migrations/ git'te takip edilir)
+- Yeni şema değişikliği: `npx prisma migrate dev --name <açıklayıcı_isim>`
+- Yeni makinede deploy: `npx prisma migrate deploy` (migrations klasörünü uygular, yeni migration oluşturmaz)
+- Sonrasında her zaman ayrıca: `npx prisma generate` (TS client'ı yeniler)
 - Config file: `prisma/prisma.config.ts` (Prisma 7 style — `url` goes here, not in schema.prisma)
 
 ### Anamnesis validation flow
