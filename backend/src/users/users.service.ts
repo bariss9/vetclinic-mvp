@@ -4,6 +4,7 @@ import {
   UnauthorizedException,
   BadRequestException,
   ForbiddenException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
@@ -24,7 +25,7 @@ export class UsersService {
   }
 
   private verificationEmail(code: string): string {
-    return `<p>VetClinic doğrulama kodunuz: <strong style="font-size:1.4em">${code}</strong></p><p>Bu kod 15 dakika geçerlidir.</p>`;
+    return `<p>VetClinic doğrulama kodunuz: <strong style="font-size:1.4em">${code}</strong></p><p>Bu kod 2 dakika geçerlidir.</p>`;
   }
 
   async register(dto: RegisterDto) {
@@ -37,7 +38,7 @@ export class UsersService {
     const hashed = await bcrypt.hash(dto.password, 10);
     const role = dto.role ?? 'OWNER';
     const code = this.generateCode();
-    const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
+    const expiresAt = new Date(Date.now() + 2 * 60 * 1000);
 
     if (existing) {
       await this.prisma.user.update({
@@ -66,7 +67,8 @@ export class UsersService {
       });
     }
 
-    await this.mail.sendMail(dto.email, 'VetClinic — E-posta Doğrulama', this.verificationEmail(code));
+    const ok = await this.mail.sendMail(dto.email, 'VetClinic — E-posta Doğrulama', this.verificationEmail(code));
+    if (!ok) throw new ServiceUnavailableException('Doğrulama kodu gönderilemedi, lütfen tekrar deneyin');
 
     return { message: 'Doğrulama kodu e-posta adresinize gönderildi' };
   }
@@ -100,14 +102,15 @@ export class UsersService {
     }
 
     const code = this.generateCode();
-    const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
+    const expiresAt = new Date(Date.now() + 2 * 60 * 1000);
 
     await this.prisma.user.update({
       where: { email: dto.email },
       data: { verificationCode: code, verificationCodeExpiresAt: expiresAt },
     });
 
-    await this.mail.sendMail(dto.email, 'VetClinic — E-posta Doğrulama', this.verificationEmail(code));
+    const ok = await this.mail.sendMail(dto.email, 'VetClinic — E-posta Doğrulama', this.verificationEmail(code));
+    if (!ok) throw new ServiceUnavailableException('Doğrulama kodu gönderilemedi, lütfen tekrar deneyin');
 
     return { message: 'Doğrulama kodu e-posta adresinize gönderildi' };
   }

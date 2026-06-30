@@ -1,11 +1,19 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import type { FormEvent } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../AuthContext';
 
+const COUNTDOWN = 120;
+
 function parseJwt(token: string): { sub: number; role: 'OWNER' | 'CLINIC' } {
   return JSON.parse(atob(token.split('.')[1]));
+}
+
+function formatTime(seconds: number): string {
+  const m = Math.floor(seconds / 60).toString().padStart(2, '0');
+  const s = (seconds % 60).toString().padStart(2, '0');
+  return `${m}:${s}`;
 }
 
 export default function VerifyEmailPage() {
@@ -13,12 +21,36 @@ export default function VerifyEmailPage() {
   const navigate  = useNavigate();
   const { login } = useAuth();
 
-  const [email, setEmail]     = useState<string>((location.state as { email?: string })?.email ?? '');
-  const [code, setCode]       = useState('');
-  const [error, setError]     = useState('');
-  const [info, setInfo]       = useState('');
-  const [loading, setLoading] = useState(false);
+  const [email, setEmail]         = useState<string>((location.state as { email?: string })?.email ?? '');
+  const [code, setCode]           = useState('');
+  const [error, setError]         = useState('');
+  const [info, setInfo]           = useState('');
+  const [loading, setLoading]     = useState(false);
   const [resending, setResending] = useState(false);
+  const [timeLeft, setTimeLeft]   = useState(COUNTDOWN);
+
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  function startCountdown() {
+    if (intervalRef.current) clearInterval(intervalRef.current);
+    setTimeLeft(COUNTDOWN);
+    intervalRef.current = setInterval(() => {
+      setTimeLeft(prev => {
+        if (prev <= 1) {
+          clearInterval(intervalRef.current!);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  }
+
+  useEffect(() => {
+    startCountdown();
+    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+  }, []);
+
+  const expired = timeLeft === 0;
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -44,6 +76,7 @@ export default function VerifyEmailPage() {
     try {
       await api.resendVerification(email);
       setInfo('Yeni kod e-posta adresinize gönderildi.');
+      startCountdown();
     } catch {
       setError('Kod gönderilemedi, lütfen tekrar deneyin.');
     } finally {
@@ -75,7 +108,17 @@ export default function VerifyEmailPage() {
       <div className="login-form-panel">
         <div className="login-form-box">
           <h1>Doğrulama Kodu</h1>
-          <p className="login-sub">Kodun süresi 15 dakikadır</p>
+
+          {/* Geri sayım */}
+          <p className="login-sub" style={{ marginBottom: '1.25rem' }}>
+            {expired ? (
+              <span style={{ color: 'var(--error, #ef4444)', fontWeight: 600 }}>
+                Kodun süresi doldu
+              </span>
+            ) : (
+              <>Kodun geçerlilik süresi: <strong>{formatTime(timeLeft)}</strong></>
+            )}
+          </p>
 
           <form onSubmit={handleSubmit}>
             {!((location.state as { email?: string })?.email) && (
@@ -111,22 +154,37 @@ export default function VerifyEmailPage() {
             {error && <p className="error-text">{error}</p>}
             {info  && <p style={{ color: 'var(--success, #22c55e)', marginBottom: '0.75rem' }}>{info}</p>}
 
-            <button type="submit" className="btn-login" disabled={loading}>
+            <button type="submit" className="btn-login" disabled={loading || expired}>
               {loading ? 'Doğrulanıyor…' : 'Doğrula ve Giriş Yap'}
             </button>
           </form>
 
-          <p className="login-switch-link" style={{ marginTop: '1rem' }}>
-            Kodu almadınız mı?{' '}
-            <button
-              type="button"
-              onClick={handleResend}
-              disabled={resending}
-              style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', padding: 0, font: 'inherit' }}
-            >
-              {resending ? 'Gönderiliyor…' : 'Tekrar gönder'}
-            </button>
-          </p>
+          {/* Tekrar gönder — süre dolduysa öne çıkar */}
+          <div style={{ marginTop: '1rem', textAlign: 'center' }}>
+            {expired ? (
+              <button
+                type="button"
+                onClick={handleResend}
+                disabled={resending}
+                className="btn-login"
+                style={{ width: 'auto', padding: '0.6rem 1.5rem' }}
+              >
+                {resending ? 'Gönderiliyor…' : 'Yeni Kod Gönder'}
+              </button>
+            ) : (
+              <p className="login-switch-link" style={{ margin: 0 }}>
+                Kodu almadınız mı?{' '}
+                <button
+                  type="button"
+                  onClick={handleResend}
+                  disabled={resending}
+                  style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', padding: 0, font: 'inherit' }}
+                >
+                  {resending ? 'Gönderiliyor…' : 'Tekrar gönder'}
+                </button>
+              </p>
+            )}
+          </div>
         </div>
       </div>
     </div>

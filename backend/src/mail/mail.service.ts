@@ -6,7 +6,7 @@ export class MailService {
   private readonly logger = new Logger(MailService.name);
   private resend = new Resend(process.env.RESEND_API_KEY);
 
-  async sendMail(to: string, subject: string, html: string): Promise<void> {
+  async sendMail(to: string, subject: string, html: string): Promise<boolean> {
     const { error } = await this.resend.emails.send({
       from: 'VetClinic <onboarding@resend.dev>',
       to,
@@ -15,6 +15,8 @@ export class MailService {
     });
     if (error) {
       this.logger.error(`Mail gönderilemedi: ${to} — ${error.message}`);
+      return false;
     }
+    return true;
   }
 }

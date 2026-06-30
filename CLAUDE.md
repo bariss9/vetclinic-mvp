@@ -12,16 +12,18 @@ The goal is:
 
 ---
 
-## CURRENT PROJECT STATUS (updated 2026-06-21)
+## CURRENT PROJECT STATUS (updated 2026-06-30)
 
 ### Completed — All modules built and working
 
 #### Backend (NestJS, running on http://localhost:3000)
-- **users** — register + login, JWT auth; User model has `role` enum (OWNER/CLINIC, default OWNER), optional `name`; JWT payload includes `{ sub, email, role }`
+- **users** — register + login, JWT auth; User model has `role` enum (OWNER/CLINIC, default OWNER), optional `name`; JWT payload includes `{ sub, email, role }`; e-posta doğrulama akışı: `isVerified`, `verificationCode`, `verificationCodeExpiresAt` alanları (migration: `add_email_verification`); POST /auth/register artık JWT dönmüyor, kod gönderip mesaj dönüyor; POST /auth/verify-email → JWT; POST /auth/resend-verification; kod süresi 2 dakika
 - **Clinic model** — linked 1:1 to User (userId unique FK); created automatically on register if role=CLINIC and clinicName provided
-- **patients** — full CRUD, ownerId from JWT; cascade deletes on MedicalRecord and Appointment FKs
-- **medical-records** — CRUD, symptoms[], aiResult JSON, anamnesis JSON, notes
-- **appointments** — CRUD, status enum (PENDING/SCHEDULED/COMPLETED/CANCELLED); GET returns full patient + owner info
+- **auth** — `src/auth/jwt-auth.guard.ts`: Bearer token doğrular, `req.user = { sub, email, role }` set eder; patients, medical-records, appointments controller'larında `@UseGuards(JwtAuthGuard)` ile kullanılıyor
+- **patients** — full CRUD, ownerId from JWT; cascade deletes on MedicalRecord and Appointment FKs; **JWT guard + ownership filtering**: OWNER sadece kendi kayıtlarını görür/değiştirir (yabancı kayıt → 403), CLINIC filtresiz erişim
+- **medical-records** — CRUD, symptoms[], aiResult JSON, anamnesis JSON, notes; **JWT guard + ownership filtering** (patients ile aynı pattern: `record.patient.ownerId`)
+- **appointments** — CRUD, status enum (PENDING/SCHEDULED/COMPLETED/CANCELLED); GET returns full patient + owner info; **JWT guard + ownership filtering**; `reminderSent Boolean @default(false)` alanı (migration: `add_appointment_reminder`); günlük cron (09:00) yarınki SCHEDULED randevular için owner'a hatırlatma maili; DEV-ONLY: POST /appointments/trigger-reminders
+- **mail** — `src/mail/mail.module.ts` (@Global); `MailService.sendMail(to, subject, html): Promise<boolean>` — Resend API, başarıda `true`, hatada `false` (exception fırlatmaz, logger.error loglar); **çağıranlar dönüş değerini kontrol etmeli**
 - **ai** — POST /ai/diagnose (Anthropic key placeholder, currently returns structured mock)
 - **anamnesis** — POST /anamnesis/next-question (start flow), POST /anamnesis/validate-answer (Groq 0-100 score, threshold 55), POST /anamnesis/chat (legacy, kept), POST /anamnesis/save
 
@@ -29,8 +31,9 @@ The goal is:
 
 **Shared / Auth**
 - **LoginPage** — JWT stored in memory (not localStorage); decodes role from JWT via parseJwt()
-- **RegisterPage** — name, email, password, role toggle (Hasta Sahibi/Klinik), conditional clinicName field
-- **AuthContext** — stores userId + role (OWNER|CLINIC); role-conditional route guards in App.tsx
+- **RegisterPage** — name, email, password, role toggle (Hasta Sahibi/Klinik), conditional clinicName field; başarılı kayıt sonrası `/verify-email`'e yönlendirir (email state ile)
+- **VerifyEmailPage** — 6 haneli kod girişi; 120 saniyelik geri sayım (MM:SS); süre dolunca "Kodun süresi doldu" + "Yeni Kod Gönder" butonu öne çıkar; resend başarısında sayaç sıfırlanır; doğrulama başarılıysa `auth.login()` → `/patients`
+- **AuthContext** — stores userId + role (OWNER|CLINIC); role-conditional route guards in App.tsx; token sadece verify-email veya login başarılıysa set edilir
 
 **OWNER panel** (OwnerRoute guard — CLINIC users redirected to /patients)
 - **PatientsPage** — "Evcil Hayvanlarım"; list + add patient form (basic fields only)
@@ -146,9 +149,18 @@ If blocklist matches → skip Groq entirely, return `{ valid: false, retryQuesti
   - Model: `llama-3.1-8b-instant`
   - Auth: Bearer token via `GROQ_API_KEY` in backend `.env`
   - Used for: anamnesis chat
+- **Resend API**: `https://api.resend.com`
+  - Auth: Bearer token via `RESEND_API_KEY` in backend `.env`
+  - Used for: e-posta doğrulama kodları, randevu hatırlatmaları
+  - `from`: `VetClinic <onboarding@resend.dev>` (test modu — bkz. Bilinen Kısıt)
 - **Overpass API** (OSM data): `https://maps.mail.ru/osm/tools/overpass/api/interpreter`
   - Used for: nearby vet clinic search (YakinKliniklerPage)
   - Current query: amenity=veterinary + amenity=animal_hospital + shop=pet, 10 km radius
+
+### Backend dependencies (önemli)
+- `@nestjs/schedule` — cron job desteği (`ScheduleModule.forRoot()` AppModule'de)
+- `resend` — mail gönderimi
+- `jsonwebtoken` — JwtAuthGuard'da token doğrulama (`@nestjs/jwt`'nin bağımlılığı, ayrıca kurulmaz)
 
 ---
 
@@ -180,7 +192,7 @@ PostgreSQL is NOT synced via git — each machine needs its own local instance.
 5. Clone repo from GitHub: `git clone https://github.com/bariss9/vetclinic-mvp.git` (private)
 6. `cd backend && npm install && npx prisma generate && npx prisma migrate deploy`
 7. `cd ../frontend && npm install`
-8. Create `backend/.env` from `backend/.env.example` — fill in real GROQ_API_KEY
+8. Create `backend/.env` from `backend/.env.example` — fill in real `GROQ_API_KEY` and `RESEND_API_KEY`
 9. `cd backend && npm run start:dev` then `cd frontend && npm run dev`
 
 ### Backend .env (C:\PROJECT\vetclinic-mvp\backend\.env — laptop)
@@ -189,6 +201,8 @@ DATABASE_URL="postgresql://postgres:postgres@localhost:5432/vetclinic"
 JWT_SECRET="<generated per machine — see .env.example>"
 GROQ_API_KEY="<real key — not committed>"
 ANTHROPIC_API_KEY="your-anthropic-api-key-here"
+RESEND_API_KEY="<Resend dashboard'dan alınır>"
+TEST_EMAIL_TO="<test maili için hedef adres — sadece lokal test>"
 ```
 Use `backend/.env.example` as template. `.env` is gitignored and must be recreated on each machine.
 
@@ -203,6 +217,42 @@ Use `backend/.env.example` as template. `.env` is gitignored and must be recreat
 - Sonrasında her zaman ayrıca: `npx prisma generate` (TS client'ı yeniler)
 - Config file: `prisma/prisma.config.ts` (Prisma 7 style — `url` goes here, not in schema.prisma)
 
+### JWT Auth Guard
+- Dosya: `src/auth/jwt-auth.guard.ts`
+- `jsonwebtoken.verify()` ile Bearer token doğrular, `req.user = { sub, email, role }` set eder
+- Exception fırlatmaz DI bağımlılığı yoktur — doğrudan `@UseGuards(JwtAuthGuard)` ile kullanılır
+- İlgili modüllerin `providers` dizisine `JwtAuthGuard` eklenmeli (PatientsModule, MedicalRecordsModule, AppointmentsModule)
+
+### Güvenlik: Ownership Filtering
+Daha önce patients/medical-records/appointments endpoint'lerinde JWT guard YOKTU — herkes herkesin verisine erişebiliyordu. Bu 2026-06-30'da kapatıldı:
+- **OWNER**: sadece kendi `ownerId`'sine ait kayıtları görür/değiştirir; yabancı kayda erişim → 403
+- **CLINIC**: tüm kayıtlara filtresiz erişim (randevu onaylama, takvim sayfası için gerekli)
+- Zincir: `MedicalRecord → patient.ownerId`, `Appointment → patient.ownerId`
+
+### E-posta Doğrulama Akışı
+- Migration: `add_email_verification` — User'a `isVerified Boolean @default(false)`, `verificationCode String?`, `verificationCodeExpiresAt DateTime?` eklendi
+- `POST /auth/register`: kayıt sonrası JWT dönmez; 6 haneli kod üretir, Resend ile gönderir, `"kod gönderildi"` mesajı döner; mail başarısız → 503
+- `POST /auth/verify-email { email, code }`: kod + süre kontrolü; başarılıysa `isVerified=true`, kod temizlenir, JWT döner
+- `POST /auth/resend-verification { email }`: yeni kod üretir, mail başarısız → 503
+- `POST /auth/login`: `isVerified=false` → 403 "Hesap doğrulanmamış"
+- Kod süresi: **2 dakika** (`expiresAt = now + 2 * 60 * 1000`)
+- Mevcut DB'deki kullanıcılar migration sonrası `isVerified=false` olur — test için: `UPDATE "User" SET "isVerified" = true WHERE email = '...'`
+
+### Randevu Hatırlatma (Cron)
+- Migration: `add_appointment_reminder` — Appointment'a `reminderSent Boolean @default(false)` eklendi
+- Dosya: `src/appointments/reminders.service.ts`
+- `@Cron('0 9 * * *')` → `runReminders()`: tarih=yarın, status=SCHEDULED, reminderSent=false olan randevuları çeker
+- Her randevu için `MailService.sendMail()`; `true` dönerse `reminderSent=true`; `false` dönerse WARN loglar, `reminderSent=false` kalır (cron ertesi gün yeniden dener)
+- Hata tek randevuyu durdurmuyor — try/catch per item
+- DEV ONLY: `POST /appointments/trigger-reminders` (production'da kaldırılmalı veya guard arkasına alınmalı)
+- `ScheduleModule.forRoot()` AppModule'de kayıtlı
+
+### MailService Sözleşmesi
+- `sendMail(to, subject, html): Promise<boolean>` — başarıda `true`, hatada `false` (exception fırlatmaz)
+- **Tüm çağıranlar dönüş değerini kontrol etmeli**; aksi halde sessiz mail kaybı riski
+- `users.service.ts`: `false` → `ServiceUnavailableException` (503)
+- `reminders.service.ts`: `false` → failed sayacı artar, `reminderSent` güncellenmez
+
 ### Anamnesis validation flow
 - Frontend calls `POST /anamnesis/next-question` once to start, then `POST /anamnesis/validate-answer` per answer
 - Backend holds all question state — frontend only tracks `questionIndex` (0-6)
@@ -211,6 +261,15 @@ Use `backend/.env.example` as template. `.env` is gitignored and must be recreat
 - `onComplete(history, summary)` callback builds `ChatMessage[]` + plain-text summary from Q&A pairs
 - Legacy `POST /anamnesis/chat` (old free-form flow) is still present in backend but unused by frontend
 - See ANAMNESIS VALIDATION ARCHITECTURE section above for full parameter table
+
+### Bilinen Kısıt: Resend Test Modu
+Resend hesabı şu an doğrulanmamış domain (`onboarding@resend.dev`) ile çalışıyor — bu modda SADECE Resend hesabına kayıtlı adrese (`barissrnl@gmail.com`) mail gönderilebiliyor. Diğer tüm adreslere (Hotmail, başka Gmail vb.) gönderim başarısız oluyor; `MailService` ERROR logluyor ve `sendMail` `false` döndürüyor:
+- `users.service.ts` çağrılarında → 503 hatası kullanıcıya yansır
+- `reminders.service.ts` çağrılarında → WARN loglanır, `reminderSent=false` kalır (cron ertesi gün yeniden dener)
+
+Production öncesi yapılması gereken: resend.com/domains'de bir domain doğrula, `mail.service.ts`'deki `from` adresini o domaine çevir.
+
+Test sırasında: kayıt/doğrulama testleri sadece `barissrnl@gmail.com` ile yapılmalı.
 
 ### Last git push
 - Repo: https://github.com/bariss9/vetclinic-mvp (private)

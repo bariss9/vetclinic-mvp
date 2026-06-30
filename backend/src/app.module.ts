@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ScheduleModule } from '@nestjs/schedule';
 import { PrismaModule } from './prisma/prisma.module';
 import { MailModule } from './mail/mail.module';
 import { UsersModule } from './users/users.module';
@@ -9,6 +10,6 @@ import { AiModule } from './ai/ai.module';
 import { AnamnesisModule } from './anamnesis/anamnesis.module';
 
 @Module({
-  imports: [PrismaModule, MailModule, UsersModule, PatientsModule, MedicalRecordsModule, AppointmentsModule, AiModule, AnamnesisModule],
+  imports: [ScheduleModule.forRoot(), PrismaModule, MailModule, UsersModule, PatientsModule, MedicalRecordsModule, AppointmentsModule, AiModule, AnamnesisModule],
 })
 export class AppModule {}
