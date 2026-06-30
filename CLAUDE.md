@@ -26,6 +26,7 @@ The goal is:
 - **mail** — `src/mail/mail.module.ts` (@Global); `MailService.sendMail(to, subject, html): Promise<boolean>` — Resend API, başarıda `true`, hatada `false` (exception fırlatmaz, logger.error loglar); **çağıranlar dönüş değerini kontrol etmeli**
 - **ai** — POST /ai/diagnose (Anthropic key placeholder, currently returns structured mock)
 - **anamnesis** — POST /anamnesis/next-question (start flow), POST /anamnesis/validate-answer (Groq 0-100 score, threshold 55), POST /anamnesis/chat (legacy, kept), POST /anamnesis/save
+- **vaccinations** — `src/vaccinations/`; VaccinationRecord entity; migration: `add_vaccination_tracking`; GET /vaccinations?patientId=N (OWNER kendi hastasıyla sınırlı, CLINIC filtresiz), POST/PUT/DELETE sadece CLINIC (OWNER → 403); PUT/DELETE ek kısıt: sadece oluşturan klinik kendi kaydını değiştirebilir (`createdByClinicId === clinic.id`); `resolveClinic(userId)` helper clinic ID'yi JWT sub'undan çeker
 
 #### Frontend (React + Vite, running on http://localhost:5173)
 
@@ -37,13 +38,13 @@ The goal is:
 
 **OWNER panel** (OwnerRoute guard — CLINIC users redirected to /patients)
 - **PatientsPage** — "Evcil Hayvanlarım"; list + add patient form (basic fields only)
-- **PatientDetailPage** — medical records, AI diagnosis form; shows anamnesis records only for CLINIC role
+- **PatientDetailPage** — medical records, AI diagnosis form; shows anamnesis records only for CLINIC role; "Aşı Takibi" bölümü salt okunur (OWNER aşı ekleyemez/düzenleyemez)
 - **RandevularimPage** — lists own appointments with status badges
 - **RandevuAlPage** — full booking flow: Leaflet map → patient select → anamnesis chatbot → time slot picker → POST /appointments
 
 **CLINIC panel** (ClinicRoute guard — OWNER users redirected to /patients)
 - **PatientsPage** — "Hastalar"; add patient includes optional 7-topic anamnesis form + Hekim Notu; delete patient button with custom confirm modal; cascade delete on backend
-- **PatientDetailPage** — shows anamnesis MedicalRecords in collapsible accordion (AnamnesisStructured); shows Hekim Notu if set
+- **PatientDetailPage** — shows anamnesis MedicalRecords in collapsible accordion (AnamnesisStructured); shows Hekim Notu if set; "Aşı Takibi" bölümü: ekleme/düzenleme/silme formu (CLINIC), salt okunur liste (OWNER); Uygulananlar (ADMINISTERED) ve Planlanmış (PLANNED) ayrı gruplandırılmış
 - **RandevuIstekleriPage** — PENDING appointments; approve (→ SCHEDULED) or reject (→ CANCELLED); shows AnamnesisStructured per card
 - **TakvimPage** — monthly calendar grid (Mon-Sun, Monday-start); SCHEDULED appointments only; click → modal with owner name, patient info, AnamnesisStructured; cancel button (→ CANCELLED)
 
@@ -221,7 +222,7 @@ Use `backend/.env.example` as template. `.env` is gitignored and must be recreat
 - Dosya: `src/auth/jwt-auth.guard.ts`
 - `jsonwebtoken.verify()` ile Bearer token doğrular, `req.user = { sub, email, role }` set eder
 - Exception fırlatmaz DI bağımlılığı yoktur — doğrudan `@UseGuards(JwtAuthGuard)` ile kullanılır
-- İlgili modüllerin `providers` dizisine `JwtAuthGuard` eklenmeli (PatientsModule, MedicalRecordsModule, AppointmentsModule)
+- İlgili modüllerin `providers` dizisine `JwtAuthGuard` eklenmeli (PatientsModule, MedicalRecordsModule, AppointmentsModule, VaccinationsModule)
 
 ### Güvenlik: Ownership Filtering
 Daha önce patients/medical-records/appointments endpoint'lerinde JWT guard YOKTU — herkes herkesin verisine erişebiliyordu. Bu 2026-06-30'da kapatıldı:
@@ -262,6 +263,44 @@ Daha önce patients/medical-records/appointments endpoint'lerinde JWT guard YOKT
 - Legacy `POST /anamnesis/chat` (old free-form flow) is still present in backend but unused by frontend
 - See ANAMNESIS VALIDATION ARCHITECTURE section above for full parameter table
 
+### Aşı Takip Modülü (Vaccinations)
+
+**Backend:** `src/vaccinations/` — `VaccinationsModule`, `VaccinationsController`, `VaccinationsService`, `vaccinations.dto.ts`
+
+**Prisma modeli (`VaccinationRecord`):**
+- `id`, `patientId` (FK → Patient, cascade delete), `vaccineName String`, `administeredDate DateTime?`, `nextDueDate DateTime?`, `status VaccinationStatus` (`PLANNED` | `ADMINISTERED`), `notes String?`, `createdByClinicId` (FK → Clinic), `createdAt`, `updatedAt`
+- Migration: `add_vaccination_tracking`
+
+**Endpoint yetkilendirme:**
+
+| Method | Endpoint | OWNER | CLINIC |
+|---|---|---|---|
+| GET | /vaccinations?patientId=N | Kendi hastası → 200, yabancı → 403 | Filtresiz |
+| POST | /vaccinations | 403 | ✓ |
+| PUT | /vaccinations/:id | 403 | Sadece `createdByClinicId === clinic.id` |
+| DELETE | /vaccinations/:id | 403 | Sadece `createdByClinicId === clinic.id` |
+
+**Klinik ID çözümleme:** JWT sadece `{ sub, email, role }` taşır — klinik ID'si `resolveClinic(userId)` helper'ı ile `prisma.clinic.findUnique({ where: { userId } })` çekilerek elde edilir.
+
+**Frontend:** `PatientDetailPage.tsx` — `vaccinations`, `vaccLoading`, `vaccError`, `showVaccForm`, `editingVacc`, `savingVacc`, `deletingVaccId`, `vaccForm` state'leri; `api.getVaccinations` / `createVaccination` / `updateVaccination` / `deleteVaccination` çağrıları; `openVaccAdd()` / `openVaccEdit(v)` / `closeVaccForm()` / `handleVaccSubmit` / `handleVaccDelete` fonksiyonları.
+
+**Tarih gösterimi — kritik not (`dateStr` fonksiyonu):**
+- ESKİ (hatalı): `new Date(iso).toLocaleDateString('tr-TR', ...)` — tarayıcı/OS locale'a ve UTC→yerel saat dönüşümüne bağımlıydı; bazı ortamlarda ay kayması riski taşıyordu
+- YENİ (güvenli): ISO string doğrudan parse edilir, `new Date()` çağrısı yapılmaz:
+  ```typescript
+  const MONTHS_TR = ['Oca', 'Şub', 'Mar', 'Nis', 'May', 'Haz', 'Tem', 'Ağu', 'Eyl', 'Eki', 'Kas', 'Ara'];
+  const dateStr = (iso: string | null): string => {
+    if (!iso) return '—';
+    const [year, month, day] = iso.slice(0, 10).split('-').map(Number);
+    return `${day} ${MONTHS_TR[month - 1]} ${year}`;
+  };
+  ```
+  `month` ISO'da 1-indexed (07 = Temmuz) → `MONTHS_TR[month-1]` = `MONTHS_TR[6]` = "Tem". Timezone veya Intl bağımlılığı yok.
+
+**Kayıt tarafı (input → backend):** `<input type="date">.value` her zaman "YYYY-MM-DD" string döner; bu string doğrudan payload'a eklenir, `new Date()` dönüşümü yapılmaz. Backend `new Date("YYYY-MM-DD")` = UTC gece yarısı (ISO date-only spec garantisi). Aralarında ay kayması mümkün değildir.
+
+**Debug log:** `handleVaccSubmit` içinde geçici `console.log('[Aşı Kayıt] payload:', JSON.stringify(payload))` mevcut — production'a alınmadan önce kaldırılmalı.
+
 ### Bilinen Kısıt: Resend Test Modu
 Resend hesabı şu an doğrulanmamış domain (`onboarding@resend.dev`) ile çalışıyor — bu modda SADECE Resend hesabına kayıtlı adrese (`barissrnl@gmail.com`) mail gönderilebiliyor. Diğer tüm adreslere (Hotmail, başka Gmail vb.) gönderim başarısız oluyor; `MailService` ERROR logluyor ve `sendMail` `false` döndürüyor:
 - `users.service.ts` çağrılarında → 503 hatası kullanıcıya yansır
@@ -288,6 +327,7 @@ Only implement the following modules:
 - appointments (simple scheduling)
 - ai (diagnosis only)
 - anamnesis (chat-based history intake)
+- vaccinations (vaccination tracking per patient)
 
 ---
 

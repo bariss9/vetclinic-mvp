@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import type { FormEvent } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../api';
-import type { PatientDetail, MedicalRecord, AiResult, AnamnesisData } from '../api';
+import type { PatientDetail, MedicalRecord, AiResult, AnamnesisData, VaccinationRecord, CreateVaccinationInput } from '../api';
 import Layout from '../components/Layout';
 import AnamnesisStructured from '../components/AnamnesisStructured';
 import { useAuth } from '../AuthContext';
@@ -43,6 +43,18 @@ export default function PatientDetailPage() {
   const [results, setResults]     = useState<Record<number, AiResult>>({});
   const [expandedAnamnesis, setExpandedAnamnesis] = useState<Set<number>>(new Set());
 
+  // Aşı takibi state
+  const [vaccinations, setVaccinations]     = useState<VaccinationRecord[]>([]);
+  const [vaccLoading, setVaccLoading]       = useState(false);
+  const [vaccError, setVaccError]           = useState('');
+  const [showVaccForm, setShowVaccForm]     = useState(false);
+  const [editingVacc, setEditingVacc]       = useState<VaccinationRecord | null>(null);
+  const [savingVacc, setSavingVacc]         = useState(false);
+  const [deletingVaccId, setDeletingVaccId] = useState<number | null>(null);
+  const [vaccForm, setVaccForm] = useState<Omit<CreateVaccinationInput, 'patientId'>>({
+    vaccineName: '', administeredDate: '', nextDueDate: '', status: 'PLANNED', notes: '',
+  });
+
   function toggleAnamnesis(id: number) {
     setExpandedAnamnesis(prev => {
       const next = new Set(prev);
@@ -65,6 +77,85 @@ export default function PatientDetailPage() {
       setError(err instanceof Error ? err.message : 'Hasta yüklenemedi');
     } finally {
       setLoading(false);
+    }
+    loadVaccinations();
+  }
+
+  async function loadVaccinations() {
+    setVaccLoading(true);
+    setVaccError('');
+    try {
+      const data = await api.getVaccinations(Number(id));
+      setVaccinations(data);
+    } catch (err: unknown) {
+      setVaccError(err instanceof Error ? err.message : 'Aşı kayıtları yüklenemedi');
+    } finally {
+      setVaccLoading(false);
+    }
+  }
+
+  function openVaccAdd() {
+    setEditingVacc(null);
+    setVaccForm({ vaccineName: '', administeredDate: '', nextDueDate: '', status: 'PLANNED', notes: '' });
+    setShowVaccForm(true);
+  }
+
+  function openVaccEdit(v: VaccinationRecord) {
+    setEditingVacc(v);
+    setVaccForm({
+      vaccineName:      v.vaccineName,
+      administeredDate: v.administeredDate ? v.administeredDate.slice(0, 10) : '',
+      nextDueDate:      v.nextDueDate      ? v.nextDueDate.slice(0, 10)      : '',
+      status:           v.status,
+      notes:            v.notes ?? '',
+    });
+    setShowVaccForm(true);
+  }
+
+  function closeVaccForm() {
+    setShowVaccForm(false);
+    setEditingVacc(null);
+  }
+
+  async function handleVaccSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setSavingVacc(true);
+    setVaccError('');
+    try {
+      const payload: CreateVaccinationInput = {
+        patientId:        Number(id),
+        vaccineName:      vaccForm.vaccineName,
+        status:           vaccForm.status,
+        ...(vaccForm.administeredDate && { administeredDate: vaccForm.administeredDate }),
+        ...(vaccForm.nextDueDate      && { nextDueDate:      vaccForm.nextDueDate }),
+        ...(vaccForm.notes            && { notes:            vaccForm.notes }),
+      };
+      // DEBUG: verify exact strings being sent (check browser console)
+      console.log('[Aşı Kayıt] payload:', JSON.stringify(payload));
+      if (editingVacc) {
+        await api.updateVaccination(editingVacc.id, payload);
+      } else {
+        await api.createVaccination(payload);
+      }
+      closeVaccForm();
+      await loadVaccinations();
+    } catch (err: unknown) {
+      setVaccError(err instanceof Error ? err.message : 'Kayıt başarısız');
+    } finally {
+      setSavingVacc(false);
+    }
+  }
+
+  async function handleVaccDelete(vaccId: number) {
+    setDeletingVaccId(vaccId);
+    setVaccError('');
+    try {
+      await api.deleteVaccination(vaccId);
+      await loadVaccinations();
+    } catch (err: unknown) {
+      setVaccError(err instanceof Error ? err.message : 'Silme başarısız');
+    } finally {
+      setDeletingVaccId(null);
     }
   }
 
@@ -320,7 +411,154 @@ export default function PatientDetailPage() {
             </div>
           );
         })}
-      </div>
+
+        {/* ── Aşı Takibi ── */}
+        {(() => {
+          const administered = vaccinations.filter(v => v.status === 'ADMINISTERED');
+          const planned      = vaccinations.filter(v => v.status === 'PLANNED');
+
+          const MONTHS_TR = ['Oca', 'Şub', 'Mar', 'Nis', 'May', 'Haz', 'Tem', 'Ağu', 'Eyl', 'Eki', 'Kas', 'Ara'];
+          const dateStr = (iso: string | null): string => {
+            if (!iso) return '—';
+            const [year, month, day] = iso.slice(0, 10).split('-').map(Number);
+            return `${day} ${MONTHS_TR[month - 1]} ${year}`;
+          };
+
+          return (
+            <div className="card" style={{ marginTop: '1.5rem' }}>
+              <div className="record-header">
+                <span style={{ fontWeight: 600, fontSize: '1rem' }}>Aşı Takibi</span>
+                {role === 'CLINIC' && !showVaccForm && (
+                  <button className="btn-secondary" style={{ padding: '.35rem .9rem', fontSize: '.85rem' }} onClick={openVaccAdd}>
+                    + Aşı Ekle
+                  </button>
+                )}
+              </div>
+
+              {/* Form (ekle / düzenle) */}
+              {role === 'CLINIC' && showVaccForm && (
+                <form onSubmit={handleVaccSubmit} style={{ marginTop: '1rem', display: 'flex', flexDirection: 'column', gap: '.75rem' }}>
+                  <div className="form-grid">
+                    <div className="field" style={{ gridColumn: '1 / -1' }}>
+                      <label>Aşı Adı *</label>
+                      <input
+                        required
+                        value={vaccForm.vaccineName}
+                        onChange={e => setVaccForm(f => ({ ...f, vaccineName: e.target.value }))}
+                        placeholder="örn. Kuduz, Karma Aşı"
+                      />
+                    </div>
+                    <div className="field">
+                      <label>Durum</label>
+                      <select
+                        value={vaccForm.status}
+                        onChange={e => setVaccForm(f => ({ ...f, status: e.target.value as 'PLANNED' | 'ADMINISTERED' }))}
+                      >
+                        <option value="PLANNED">Planlandı</option>
+                        <option value="ADMINISTERED">Uygulandı</option>
+                      </select>
+                    </div>
+                    <div className="field">
+                      <label>Uygulama Tarihi</label>
+                      <input
+                        type="date"
+                        value={vaccForm.administeredDate}
+                        onChange={e => setVaccForm(f => ({ ...f, administeredDate: e.target.value }))}
+                      />
+                    </div>
+                    <div className="field">
+                      <label>Sonraki Doz Tarihi</label>
+                      <input
+                        type="date"
+                        value={vaccForm.nextDueDate}
+                        onChange={e => setVaccForm(f => ({ ...f, nextDueDate: e.target.value }))}
+                      />
+                    </div>
+                    <div className="field" style={{ gridColumn: '1 / -1' }}>
+                      <label>Notlar</label>
+                      <input
+                        value={vaccForm.notes}
+                        onChange={e => setVaccForm(f => ({ ...f, notes: e.target.value }))}
+                        placeholder="İsteğe bağlı"
+                      />
+                    </div>
+                  </div>
+                  {vaccError && <p className="error-text">{vaccError}</p>}
+                  <div className="form-actions">
+                    <button type="button" className="btn-ghost" onClick={closeVaccForm}>İptal</button>
+                    <button type="submit" className="btn-secondary" disabled={savingVacc}>
+                      {savingVacc ? 'Kaydediliyor…' : editingVacc ? 'Güncelle' : 'Kaydet'}
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {vaccLoading && <p className="muted-text" style={{ marginTop: '.75rem' }}>Yükleniyor…</p>}
+              {!showVaccForm && vaccError && <p className="error-text" style={{ marginTop: '.75rem' }}>{vaccError}</p>}
+
+              {/* Uygulanmış */}
+              {administered.length > 0 && (
+                <div style={{ marginTop: '1rem' }}>
+                  <p className="ai-col-title" style={{ marginBottom: '.5rem' }}>Uygulananlar</p>
+                  {administered.map(v => (
+                    <div key={v.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '.6rem 0', borderBottom: '1px solid var(--border)' }}>
+                      <div>
+                        <span style={{ fontWeight: 600 }}>{v.vaccineName}</span>
+                        <span className="muted-text" style={{ fontSize: '.8rem', marginLeft: '.5rem' }}>
+                          {dateStr(v.administeredDate)}
+                          {v.nextDueDate && ` · Sonraki: ${dateStr(v.nextDueDate)}`}
+                        </span>
+                        {v.notes && <p className="muted-text" style={{ fontSize: '.8rem', margin: '.2rem 0 0' }}>{v.notes}</p>}
+                      </div>
+                      {role === 'CLINIC' && (
+                        <div style={{ display: 'flex', gap: '.4rem', flexShrink: 0, marginLeft: '1rem' }}>
+                          <button className="btn-ghost" style={{ padding: '.25rem .6rem', fontSize: '.8rem' }} onClick={() => openVaccEdit(v)}>Düzenle</button>
+                          <button className="btn-danger" style={{ padding: '.25rem .6rem', fontSize: '.8rem' }} disabled={deletingVaccId === v.id} onClick={() => handleVaccDelete(v.id)}>
+                            {deletingVaccId === v.id ? '…' : 'Sil'}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Planlanmış */}
+              {planned.length > 0 && (
+                <div style={{ marginTop: '1rem' }}>
+                  <p className="ai-col-title" style={{ marginBottom: '.5rem' }}>Planlanmış</p>
+                  {planned.map(v => (
+                    <div key={v.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '.6rem 0', borderBottom: '1px solid var(--border)' }}>
+                      <div>
+                        <span style={{ fontWeight: 600 }}>{v.vaccineName}</span>
+                        {v.nextDueDate && (
+                          <span className="muted-text" style={{ fontSize: '.8rem', marginLeft: '.5rem' }}>
+                            Planlanan: {dateStr(v.nextDueDate)}
+                          </span>
+                        )}
+                        {v.notes && <p className="muted-text" style={{ fontSize: '.8rem', margin: '.2rem 0 0' }}>{v.notes}</p>}
+                      </div>
+                      {role === 'CLINIC' && (
+                        <div style={{ display: 'flex', gap: '.4rem', flexShrink: 0, marginLeft: '1rem' }}>
+                          <button className="btn-ghost" style={{ padding: '.25rem .6rem', fontSize: '.8rem' }} onClick={() => openVaccEdit(v)}>Düzenle</button>
+                          <button className="btn-danger" style={{ padding: '.25rem .6rem', fontSize: '.8rem' }} disabled={deletingVaccId === v.id} onClick={() => handleVaccDelete(v.id)}>
+                            {deletingVaccId === v.id ? '…' : 'Sil'}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {vaccinations.length === 0 && !vaccLoading && (
+                <p className="muted-text" style={{ marginTop: '.75rem' }}>Henüz aşı kaydı yok.</p>
+              )}
+            </div>
+          );
+        })()}
+
+      </div>  {/* /page-body */}
 
       {showDeleteModal && (
         <div className="takvim-overlay" onClick={() => setShowDeleteModal(false)}>

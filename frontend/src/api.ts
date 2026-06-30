@@ -75,7 +75,42 @@ export const api = {
 
   getMedicalRecord: (id: number) =>
     req<MedicalRecord>('GET', `/medical-records/${id}`),
+
+  getVaccinations: (patientId: number) =>
+    req<VaccinationRecord[]>('GET', `/vaccinations?patientId=${patientId}`),
+
+  createVaccination: (data: CreateVaccinationInput) =>
+    req<VaccinationRecord>('POST', '/vaccinations', data),
+
+  updateVaccination: (id: number, data: Partial<CreateVaccinationInput>) =>
+    req<VaccinationRecord>('PUT', `/vaccinations/${id}`, data),
+
+  deleteVaccination: (id: number) =>
+    req<void>('DELETE', `/vaccinations/${id}`),
 };
+
+export interface VaccinationRecord {
+  id: number;
+  patientId: number;
+  vaccineName: string;
+  administeredDate: string | null;
+  nextDueDate: string | null;
+  status: 'PLANNED' | 'ADMINISTERED';
+  notes: string | null;
+  createdByClinicId: number;
+  createdByClinic: { id: number; name: string };
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateVaccinationInput {
+  patientId: number;
+  vaccineName: string;
+  administeredDate?: string;
+  nextDueDate?: string;
+  status?: 'PLANNED' | 'ADMINISTERED';
+  notes?: string;
+}
 
 export interface Patient {
   id: number;

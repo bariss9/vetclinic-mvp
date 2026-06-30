@@ -21,16 +21,17 @@ model User {
 }
 
 model Patient {
-  id             Int             @id @default(autoincrement())
-  name           String
-  species        String
-  breed          String
-  age            Int
-  ownerId        Int
-  owner          User            @relation(fields: [ownerId], references: [id])
-  createdAt      DateTime        @default(now())
-  medicalRecords MedicalRecord[]
-  appointments   Appointment[]
+  id                 Int                  @id @default(autoincrement())
+  name               String
+  species            String
+  breed              String
+  age                Int
+  ownerId            Int
+  owner              User                 @relation(fields: [ownerId], references: [id])
+  createdAt          DateTime             @default(now())
+  medicalRecords     MedicalRecord[]
+  appointments       Appointment[]
+  vaccinationRecords VaccinationRecord[]
 }
 
 model Appointment {
@@ -63,13 +64,29 @@ model MedicalRecord {
 }
 
 model Clinic {
-  id        Int      @id @default(autoincrement())
-  userId    Int      @unique
-  user      User     @relation(fields: [userId], references: [id])
-  name      String
-  address   String?
-  phone     String?
-  createdAt DateTime @default(now())
+  id                 Int                  @id @default(autoincrement())
+  userId             Int                  @unique
+  user               User                 @relation(fields: [userId], references: [id])
+  name               String
+  address            String?
+  phone              String?
+  createdAt          DateTime             @default(now())
+  vaccinationRecords VaccinationRecord[]
+}
+
+model VaccinationRecord {
+  id                Int               @id @default(autoincrement())
+  patientId         Int
+  patient           Patient           @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  vaccineName       String
+  administeredDate  DateTime?
+  nextDueDate       DateTime?
+  status            VaccinationStatus @default(PLANNED)
+  notes             String?
+  createdByClinicId Int
+  createdByClinic   Clinic            @relation(fields: [createdByClinicId], references: [id])
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
 }
 
 enum Role {
@@ -82,4 +99,9 @@ enum AppointmentStatus {
   SCHEDULED
   COMPLETED
   CANCELLED
+}
+
+enum VaccinationStatus {
+  PLANNED
+  ADMINISTERED
 }

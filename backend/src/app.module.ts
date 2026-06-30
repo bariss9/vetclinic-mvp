@@ -8,8 +8,9 @@ import { MedicalRecordsModule } from './medical-records/medical-records.module';
 import { AppointmentsModule } from './appointments/appointments.module';
 import { AiModule } from './ai/ai.module';
 import { AnamnesisModule } from './anamnesis/anamnesis.module';
+import { VaccinationsModule } from './vaccinations/vaccinations.module';
 
 @Module({
-  imports: [ScheduleModule.forRoot(), PrismaModule, MailModule, UsersModule, PatientsModule, MedicalRecordsModule, AppointmentsModule, AiModule, AnamnesisModule],
+  imports: [ScheduleModule.forRoot(), PrismaModule, MailModule, UsersModule, PatientsModule, MedicalRecordsModule, AppointmentsModule, AiModule, AnamnesisModule, VaccinationsModule],
 })
 export class AppModule {}
