@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreatePatientDto, UpdatePatientDto } from './patients.dto';
 
@@ -6,13 +6,15 @@ import { CreatePatientDto, UpdatePatientDto } from './patients.dto';
 export class PatientsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  findAll() {
+  findAll(callerId: number, callerRole: string) {
+    const where = callerRole === 'CLINIC' ? {} : { ownerId: callerId };
     return this.prisma.patient.findMany({
+      where,
       include: { owner: { select: { id: true, email: true } } },
     });
   }
 
-  async findOne(id: number) {
+  async findOne(id: number, callerId: number, callerRole: string) {
     const patient = await this.prisma.patient.findUnique({
       where: { id },
       include: {
@@ -21,6 +23,9 @@ export class PatientsService {
       },
     });
     if (!patient) throw new NotFoundException(`Patient #${id} not found`);
+    if (callerRole === 'OWNER' && patient.ownerId !== callerId) {
+      throw new ForbiddenException('Bu hastaya erişim yetkiniz yok');
+    }
     return patient;
   }
 
@@ -31,8 +36,8 @@ export class PatientsService {
     });
   }
 
-  async update(id: number, dto: UpdatePatientDto) {
-    await this.findOne(id);
+  async update(id: number, dto: UpdatePatientDto, callerId: number, callerRole: string) {
+    await this.findOne(id, callerId, callerRole);
     return this.prisma.patient.update({
       where: { id },
       data: dto,
@@ -40,8 +45,8 @@ export class PatientsService {
     });
   }
 
-  async remove(id: number) {
-    await this.findOne(id);
+  async remove(id: number, callerId: number, callerRole: string) {
+    await this.findOne(id, callerId, callerRole);
     return this.prisma.patient.delete({ where: { id } });
   }
 }

@@ -28,6 +28,12 @@ export const api = {
   login: (email: string, password: string) =>
     req<{ access_token: string }>('POST', '/auth/login', { email, password }),
 
+  verifyEmail: (email: string, code: string) =>
+    req<{ access_token: string }>('POST', '/auth/verify-email', { email, code }),
+
+  resendVerification: (email: string) =>
+    req<{ message: string }>('POST', '/auth/resend-verification', { email }),
+
   getPatients: () =>
     req<Patient[]>('GET', '/patients'),
 

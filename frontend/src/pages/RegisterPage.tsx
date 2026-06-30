@@ -25,7 +25,7 @@ export default function RegisterPage() {
         role,
         ...(role === 'CLINIC' && clinicName ? { clinicName } : {}),
       });
-      navigate('/');
+      navigate('/verify-email', { state: { email } });
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Kayıt başarısız');
     } finally {

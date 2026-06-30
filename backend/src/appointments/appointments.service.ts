@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { AppointmentStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateAppointmentDto, UpdateAppointmentDto } from './appointments.dto';
@@ -6,12 +6,6 @@ import { CreateAppointmentDto, UpdateAppointmentDto } from './appointments.dto';
 @Injectable()
 export class AppointmentsService {
   constructor(private readonly prisma: PrismaService) {}
-
-  private async resolvePatient(patientId: number) {
-    const patient = await this.prisma.patient.findUnique({ where: { id: patientId } });
-    if (!patient) throw new NotFoundException(`Patient #${patientId} not found`);
-    return patient;
-  }
 
   private readonly patientInclude = {
     patient: {
@@ -30,26 +24,39 @@ export class AppointmentsService {
     return appointment;
   }
 
-  findAll() {
+  private guardOwner(ownerId: number, callerId: number, callerRole: string) {
+    if (callerRole === 'OWNER' && ownerId !== callerId) {
+      throw new ForbiddenException('Bu randevuya erişim yetkiniz yok');
+    }
+  }
+
+  findAll(callerId: number, callerRole: string) {
+    const where = callerRole === 'CLINIC' ? {} : { patient: { ownerId: callerId } };
     return this.prisma.appointment.findMany({
+      where,
       include: this.patientInclude,
       orderBy: { date: 'asc' },
     });
   }
 
-  findByPatient(patientId: number) {
-    return this.prisma.appointment.findMany({
-      where: { patientId },
-      orderBy: { date: 'asc' },
-    });
+  findByPatient(patientId: number, callerId: number, callerRole: string) {
+    const where =
+      callerRole === 'CLINIC'
+        ? { patientId }
+        : { patientId, patient: { ownerId: callerId } };
+    return this.prisma.appointment.findMany({ where, orderBy: { date: 'asc' } });
   }
 
-  findOne(id: number) {
-    return this.resolveAppointment(id);
+  async findOne(id: number, callerId: number, callerRole: string) {
+    const appt = await this.resolveAppointment(id);
+    this.guardOwner(appt.patient.ownerId, callerId, callerRole);
+    return appt;
   }
 
-  async create(dto: CreateAppointmentDto) {
-    await this.resolvePatient(dto.patientId);
+  async create(dto: CreateAppointmentDto, callerId: number, callerRole: string) {
+    const patient = await this.prisma.patient.findUnique({ where: { id: dto.patientId } });
+    if (!patient) throw new NotFoundException(`Patient #${dto.patientId} not found`);
+    this.guardOwner(patient.ownerId, callerId, callerRole);
     return this.prisma.appointment.create({
       data: {
         patientId:     dto.patientId,
@@ -65,12 +72,12 @@ export class AppointmentsService {
     });
   }
 
-  async update(id: number, dto: UpdateAppointmentDto) {
-    await this.resolveAppointment(id);
+  async update(id: number, dto: UpdateAppointmentDto, callerId: number, callerRole: string) {
+    await this.findOne(id, callerId, callerRole);
     return this.prisma.appointment.update({
       where: { id },
       data: {
-        ...(dto.date !== undefined && { date: new Date(dto.date) }),
+        ...(dto.date   !== undefined && { date:   new Date(dto.date) }),
         ...(dto.reason !== undefined && { reason: dto.reason }),
         ...(dto.status !== undefined && { status: dto.status as AppointmentStatus }),
       },
@@ -78,8 +85,8 @@ export class AppointmentsService {
     });
   }
 
-  async remove(id: number) {
-    await this.resolveAppointment(id);
+  async remove(id: number, callerId: number, callerRole: string) {
+    await this.findOne(id, callerId, callerRole);
     return this.prisma.appointment.delete({ where: { id } });
   }
 }
