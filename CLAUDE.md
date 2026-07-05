@@ -12,7 +12,7 @@ The goal is:
 
 ---
 
-## CURRENT PROJECT STATUS (updated 2026-06-30)
+## CURRENT PROJECT STATUS (updated 2026-07-05)
 
 ### Completed — All modules built and working
 
@@ -22,7 +22,7 @@ The goal is:
 - **auth** — `src/auth/jwt-auth.guard.ts`: Bearer token doğrular, `req.user = { sub, email, role }` set eder; patients, medical-records, appointments controller'larında `@UseGuards(JwtAuthGuard)` ile kullanılıyor
 - **patients** — full CRUD, ownerId from JWT; cascade deletes on MedicalRecord and Appointment FKs; **JWT guard + ownership filtering**: OWNER sadece kendi kayıtlarını görür/değiştirir (yabancı kayıt → 403), CLINIC filtresiz erişim
 - **medical-records** — CRUD, symptoms[], aiResult JSON, anamnesis JSON, notes; **JWT guard + ownership filtering** (patients ile aynı pattern: `record.patient.ownerId`)
-- **appointments** — CRUD, status enum (PENDING/SCHEDULED/COMPLETED/CANCELLED); GET returns full patient + owner info; **JWT guard + ownership filtering**; `reminderSent Boolean @default(false)` alanı (migration: `add_appointment_reminder`); günlük cron (09:00) yarınki SCHEDULED randevular için owner'a hatırlatma maili; DEV-ONLY: POST /appointments/trigger-reminders
+- **appointments** — CRUD, status enum (PENDING/SCHEDULED/COMPLETED/CANCELLED/NO_SHOW/UNCERTAIN — migration: `add_appointment_status_values`); GET returns full patient + owner info; **JWT guard + ownership filtering**; **rol bazlı status geçiş kısıtları** (bkz. Randevu Durum Yönetimi); `reminderSent Boolean @default(false)` alanı (migration: `add_appointment_reminder`); günlük cron (09:00) yarınki SCHEDULED randevular için owner'a hatırlatma maili; günlük cron (08:00) tarihi 2+ gün geçmiş SCHEDULED randevuları UNCERTAIN'e çeker; DEV-ONLY: POST /appointments/trigger-reminders
 - **mail** — `src/mail/mail.module.ts` (@Global); `MailService.sendMail(to, subject, html): Promise<boolean>` — Resend API, başarıda `true`, hatada `false` (exception fırlatmaz, logger.error loglar); **çağıranlar dönüş değerini kontrol etmeli**
 - **ai** — POST /ai/diagnose (Anthropic key placeholder, currently returns structured mock)
 - **anamnesis** — POST /anamnesis/next-question (start flow), POST /anamnesis/validate-answer (Groq 0-100 score, threshold 55), POST /anamnesis/chat (legacy, kept), POST /anamnesis/save
@@ -45,13 +45,13 @@ The goal is:
 **CLINIC panel** (ClinicRoute guard — OWNER users redirected to /patients)
 - **PatientsPage** — "Hastalar"; add patient includes optional 7-topic anamnesis form + Hekim Notu; delete patient button with custom confirm modal; cascade delete on backend
 - **PatientDetailPage** — shows anamnesis MedicalRecords in collapsible accordion (AnamnesisStructured); shows Hekim Notu if set; "Aşı Takibi" bölümü: ekleme/düzenleme/silme formu (CLINIC), salt okunur liste (OWNER); Uygulananlar (ADMINISTERED) ve Planlanmış (PLANNED) ayrı gruplandırılmış
-- **RandevuIstekleriPage** — PENDING appointments; approve (→ SCHEDULED) or reject (→ CANCELLED); shows AnamnesisStructured per card
-- **TakvimPage** — monthly calendar grid (Mon-Sun, Monday-start); SCHEDULED appointments only; click → modal with owner name, patient info, AnamnesisStructured; cancel button (→ CANCELLED)
+- **RandevuIstekleriPage** — sidebar adı "Randevular"; iki sekme (`tab-bar`): **"Randevu İstekleri"** (PENDING; approve → SCHEDULED, reject → CANCELLED — onaylanan kart anında ikinci sekmeye taşınır) ve **"Planlanmış Randevular"** (SCHEDULED; "Yapıldı" → COMPLETED, "Gerçekleşmedi" → NO_SHOW); her kartta AnamnesisStructured
+- **TakvimPage** — monthly calendar grid (Mon-Sun, Monday-start); **tüm status'lar** gösterilir, renk haritası: SCHEDULED lacivert (varsayılan), COMPLETED yeşil, NO_SHOW kırmızı, UNCERTAIN sarı, CANCELLED gri+üstü çizili, PENDING soluk lacivert; click → modal (Türkçe status rozeti, owner name, patient info, AnamnesisStructured); iptal butonu sadece PENDING/SCHEDULED'da görünür, iptal sonrası kart takvimde gri/çizgili kalır
 
 **Components**
-- **AnamnesisChat** — chatbot UI; now uses validation-based flow (next-question + validate-answer); no ANAMNESIS_COMPLETE token needed
-- **AnamnesisStructured** — parses 7-topic anamnesis data (chatbot or manual) into key-value display; shared by PatientDetailPage, TakvimPage modal, RandevuIstekleriPage cards; no closing summary shown
-- **Layout** — role-conditional sidebar nav (OWNER: Evcil Hayvanlarım / Randevularım / Randevu Al; CLINIC: Hastalar / Randevu İstekleri / Takvim)
+- **AnamnesisChat** — chatbot UI; now uses validation-based flow (next-question + validate-answer); no ANAMNESIS_COMPLETE token needed; QAPair key'leri `QUESTION_KEYS` sabitiyle backend anahtarlarını kullanır (chief_complaint, duration vb. — DB'ye yazılan summary Türkçe etiketli); her soru geldikten sonra input'a auto-focus (`inputRef` + `useEffect`); 7. cevap sonrası `onComplete` **1500ms gecikmeli** çağrılır (kapanış balonu görünsün diye; unmount'ta `clearTimeout`)
+- **AnamnesisStructured** — parses 7-topic anamnesis data (chatbot or manual) into key-value display; shared by PatientDetailPage, TakvimPage modal, RandevuIstekleriPage cards; no closing summary shown; `.slice(1)` KALDIRILDI (2026-07-05) — yeni akışta tüm user mesajları gerçek cevap; legacy chat kayıtlarında ilk satırda selamlama görünebilir (MVP'de kabul edilebilir)
+- **Layout** — role-conditional sidebar nav (OWNER: Evcil Hayvanlarım / Randevularım / Randevu Al; CLINIC: Hastalar / Randevular / Takvim)
 
 All UI text is in **Turkish**.
 
@@ -118,10 +118,10 @@ If blocklist matches → skip Groq entirely, return `{ valid: false, retryQuesti
 1. Start: call `next-question` → display first question as bot bubble
 2. User types answer → call `validate-answer`
 3. While waiting: typing indicator shown
-4. `valid: true && !done` → show nextQuestion, advance index
-5. `valid: true && done` → show "Anamnez tamamlandı, teşekkürler!", fire `onComplete(history, summary)`
+4. `valid: true && !done` → show nextQuestion, advance index; input'a auto-focus
+5. `valid: true && done` → show "Anamnez tamamlandı, teşekkürler!", `onComplete(history, summary)` **1500ms gecikmeyle** ateşlenir (kapanış balonu okunabilsin; modal bu sürede kapatılırsa `clearTimeout` ile iptal)
 6. `valid: false` → show `retryQuestion` bubble, same index (no advance)
-7. `onComplete` builds `ChatMessage[]` history + plain-text summary from Q&A pairs for RandevuAlPage
+7. `onComplete` builds `ChatMessage[]` history + plain-text summary from Q&A pairs for RandevuAlPage; pair key'leri backend ile aynı (`QUESTION_KEYS`: chief_complaint, duration, severity, appetite, water_intake, behavior, vaccination) — summary satırları Türkçe etiketli ("Ana Şikayet: …")
 
 ### Legacy endpoints (kept, not used by frontend)
 - POST /anamnesis/chat — old free-form Groq chat (LLM-driven, ANAMNESIS_COMPLETE token)
@@ -247,6 +247,23 @@ Daha önce patients/medical-records/appointments endpoint'lerinde JWT guard YOKT
 - Hata tek randevuyu durdurmuyor — try/catch per item
 - DEV ONLY: `POST /appointments/trigger-reminders` (production'da kaldırılmalı veya guard arkasına alınmalı)
 - `ScheduleModule.forRoot()` AppModule'de kayıtlı
+- `@Cron('0 8 * * *')` → `markStaleAppointments()`: tarihi 2+ gün geçmiş (dünün 00:00'ından eski) ve hâlâ SCHEDULED olan randevuları tek `updateMany` ile UNCERTAIN'e çeker; **reminderSent'ten tamamen bağımsız** ayrı bir otomatik geçiştir
+
+### Randevu Durum Yönetimi (Status Transitions)
+- Migration: `add_appointment_status_values` — `AppointmentStatus` enum'a `NO_SHOW` ve `UNCERTAIN` eklendi (2026-07-05)
+- `appointments.service.ts` → `guardStatusTransition(current, next, callerRole)`: `update()` içinde status değişikliğinde çağrılır; aynı status'a güncelleme no-op (idempotent, serbest)
+- **OWNER**: sadece kendi randevusunu iptal edebilir — hedef `CANCELLED` değilse → 403; `CANCELLED` ama mevcut durum PENDING/SCHEDULED değilse → 400
+- **CLINIC** geçiş haritası (`CLINIC_TRANSITIONS`):
+
+| Mevcut | İzinli hedefler |
+|---|---|
+| PENDING | SCHEDULED, CANCELLED |
+| SCHEDULED | COMPLETED, NO_SHOW, CANCELLED |
+| UNCERTAIN | COMPLETED, NO_SHOW, CANCELLED (cron'un çektiği belirsiz durumu klinik çözümler) |
+| COMPLETED / CANCELLED / NO_SHOW | — (son durum, geri dönüş yok → 400) |
+
+- `UNCERTAIN` manuel set edilemez — sadece 08:00 cron'u atar (DTO kabul eder ama geçiş haritasında hedef olarak yer almadığı için servis reddeder)
+- Frontend renk haritası (TakvimPage `STATUS_CLASS` + index.css `takvim-event-*`): SCHEDULED lacivert, COMPLETED yeşil, NO_SHOW kırmızı, UNCERTAIN sarı, CANCELLED gri+çizgili, PENDING soluk
 
 ### MailService Sözleşmesi
 - `sendMail(to, subject, html): Promise<boolean>` — başarıda `true`, hatada `false` (exception fırlatmaz)
@@ -262,6 +279,7 @@ Daha önce patients/medical-records/appointments endpoint'lerinde JWT guard YOKT
 - `onComplete(history, summary)` callback builds `ChatMessage[]` + plain-text summary from Q&A pairs
 - Legacy `POST /anamnesis/chat` (old free-form flow) is still present in backend but unused by frontend
 - See ANAMNESIS VALIDATION ARCHITECTURE section above for full parameter table
+- **2026-07-05 düzeltmeleri:** (1) `AnamnesisStructured` `.slice(1)` kaldırıldı — soru-cevap eşleşme kayması giderildi (E2E doğrulandı: 7/7 satır doğru); (2) QAPair key'leri `q0/q1…` yerine `QUESTION_KEYS` (backend anahtarları) — DB'deki summary Türkçe etiketli; (3) her soru sonrası input auto-focus; (4) `onComplete` 1500ms gecikmeli (kapanış balonu görünür, unmount'ta `clearTimeout`)
 
 ### Aşı Takip Modülü (Vaccinations)
 

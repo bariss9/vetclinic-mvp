@@ -40,7 +40,7 @@ export class UpdateAppointmentDto {
   @IsOptional()
   reason?: string;
 
-  @IsEnum(['PENDING', 'SCHEDULED', 'COMPLETED', 'CANCELLED'])
+  @IsEnum(['PENDING', 'SCHEDULED', 'COMPLETED', 'CANCELLED', 'NO_SHOW', 'UNCERTAIN'])
   @IsOptional()
-  status?: 'PENDING' | 'SCHEDULED' | 'COMPLETED' | 'CANCELLED';
+  status?: 'PENDING' | 'SCHEDULED' | 'COMPLETED' | 'CANCELLED' | 'NO_SHOW' | 'UNCERTAIN';
 }

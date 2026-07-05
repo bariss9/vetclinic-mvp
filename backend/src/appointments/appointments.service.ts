@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { AppointmentStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateAppointmentDto, UpdateAppointmentDto } from './appointments.dto';
@@ -27,6 +27,36 @@ export class AppointmentsService {
   private guardOwner(ownerId: number, callerId: number, callerRole: string) {
     if (callerRole === 'OWNER' && ownerId !== callerId) {
       throw new ForbiddenException('Bu randevuya erişim yetkiniz yok');
+    }
+  }
+
+  // CLINIC'in yapabileceği status geçişleri; UNCERTAIN cron tarafından set edilir,
+  // klinik sonradan gerçek sonuca çözümleyebilir. COMPLETED/CANCELLED/NO_SHOW son durumdur.
+  private static readonly CLINIC_TRANSITIONS: Record<AppointmentStatus, AppointmentStatus[]> = {
+    PENDING:   ['SCHEDULED', 'CANCELLED'],
+    SCHEDULED: ['COMPLETED', 'NO_SHOW', 'CANCELLED'],
+    UNCERTAIN: ['COMPLETED', 'NO_SHOW', 'CANCELLED'],
+    COMPLETED: [],
+    CANCELLED: [],
+    NO_SHOW:   [],
+  };
+
+  private guardStatusTransition(current: AppointmentStatus, next: AppointmentStatus, callerRole: string) {
+    if (next === current) return; // no-op, idempotent
+
+    if (callerRole === 'OWNER') {
+      if (next !== 'CANCELLED') {
+        throw new ForbiddenException('Randevu sahibi sadece randevusunu iptal edebilir');
+      }
+      if (current !== 'PENDING' && current !== 'SCHEDULED') {
+        throw new BadRequestException(`${current} durumundaki randevu iptal edilemez`);
+      }
+      return;
+    }
+
+    const allowed = AppointmentsService.CLINIC_TRANSITIONS[current] ?? [];
+    if (!allowed.includes(next)) {
+      throw new BadRequestException(`Geçersiz durum geçişi: ${current} → ${next}`);
     }
   }
 
@@ -73,7 +103,10 @@ export class AppointmentsService {
   }
 
   async update(id: number, dto: UpdateAppointmentDto, callerId: number, callerRole: string) {
-    await this.findOne(id, callerId, callerRole);
+    const appointment = await this.findOne(id, callerId, callerRole);
+    if (dto.status !== undefined) {
+      this.guardStatusTransition(appointment.status, dto.status as AppointmentStatus, callerRole);
+    }
     return this.prisma.appointment.update({
       where: { id },
       data: {

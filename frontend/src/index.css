@@ -589,6 +589,15 @@ button:active:not(:disabled) { transform: scale(.98); }
   transition: opacity .15s;
 }
 .takvim-event:hover { opacity: .85; }
+
+/* status renkleri — SCHEDULED varsayılan koyu rengi (--navy) kullanır */
+.takvim-event-completed { background: #16a34a; }
+.takvim-event-noshow    { background: #dc2626; }
+.takvim-event-uncertain { background: #eab308; color: #1f2937; }
+.takvim-event-cancelled { background: #94a3b8; text-decoration: line-through; }
+.takvim-event-pending   { background: var(--navy); opacity: .45; }
+.takvim-event-pending:hover { opacity: .6; }
+
 .takvim-event-time { font-size: .65rem; opacity: .8; line-height: 1.2; }
 .takvim-event-name { font-size: .75rem; font-weight: 600; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 

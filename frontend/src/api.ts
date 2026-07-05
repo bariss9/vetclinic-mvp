@@ -200,12 +200,20 @@ export interface CreateAppointmentInput {
   anamnesisId?: string;
 }
 
+export type AppointmentStatus =
+  | 'PENDING'
+  | 'SCHEDULED'
+  | 'COMPLETED'
+  | 'CANCELLED'
+  | 'NO_SHOW'
+  | 'UNCERTAIN';
+
 export interface Appointment {
   id: number;
   patientId: number;
   date: string;
   reason: string;
-  status: 'PENDING' | 'SCHEDULED' | 'COMPLETED' | 'CANCELLED';
+  status: AppointmentStatus;
   clinicName: string | null;
   clinicAddress: string | null;
   clinicLat: number | null;

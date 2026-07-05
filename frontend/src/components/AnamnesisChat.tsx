@@ -20,6 +20,17 @@ interface QAPair {
   answer: string;
 }
 
+// Backend'in QUESTIONS dizisiyle aynı sırada (anamnesis.service.ts)
+const QUESTION_KEYS = [
+  'chief_complaint',
+  'duration',
+  'severity',
+  'appetite',
+  'water_intake',
+  'behavior',
+  'vaccination',
+] as const;
+
 function buildHistory(pairs: QAPair[]): ChatMessage[] {
   return pairs.flatMap(p => [
     { role: 'model' as const, text: p.question },
@@ -53,16 +64,26 @@ export default function AnamnesisChat({ patientId, onSaved, onComplete }: Props)
   const [error, setError]             = useState('');
   const [started, setStarted]         = useState(false);
   const bottomRef                     = useRef<HTMLDivElement>(null);
+  const inputRef                      = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [bubbles, loading]);
 
+  // Soru geldikten sonra (başlangıç ve her cevap sonrası) input'a odaklan;
+  // input loading sırasında disabled olduğundan focus ancak loading bitince tutar
+  useEffect(() => {
+    if (started && !loading && !done) inputRef.current?.focus();
+  }, [started, loading, done]);
+
   useEffect(() => {
     if (!done || !onComplete) return;
     const history = buildHistory(answers);
     const summary = buildSummary(answers);
-    onComplete(history, summary);
+    // Kapanış balonu okunabilsin diye adım geçişini geciktir;
+    // modal bu sürede kapatılırsa timer temizlenir, onComplete hiç ateşlenmez
+    const timer = setTimeout(() => onComplete(history, summary), 1500);
+    return () => clearTimeout(timer);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [done]);
 
@@ -97,7 +118,11 @@ export default function AnamnesisChat({ patientId, onSaved, onComplete }: Props)
       const res = await api.validateAnswer({ questionIndex, answer: text });
 
       if (res.valid) {
-        const newPair: QAPair = { key: `q${questionIndex}`, question: currentQuestion, answer: text };
+        const newPair: QAPair = {
+          key: QUESTION_KEYS[questionIndex] ?? `q${questionIndex}`,
+          question: currentQuestion,
+          answer: text,
+        };
         const newAnswers = [...answers, newPair];
         setAnswers(newAnswers);
 
@@ -213,6 +238,7 @@ export default function AnamnesisChat({ patientId, onSaved, onComplete }: Props)
       ) : (
         <form className="chat-input-bar" onSubmit={sendMessage}>
           <input
+            ref={inputRef}
             className="chat-input"
             value={input}
             onChange={e => setInput(e.target.value)}

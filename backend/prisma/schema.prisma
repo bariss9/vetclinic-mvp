@@ -99,6 +99,8 @@ enum AppointmentStatus {
   SCHEDULED
   COMPLETED
   CANCELLED
+  NO_SHOW
+  UNCERTAIN
 }
 
 enum VaccinationStatus {

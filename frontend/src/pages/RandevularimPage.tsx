@@ -10,6 +10,8 @@ const STATUS_LABEL: Record<Appointment['status'], string> = {
   SCHEDULED: 'Onaylandı',
   COMPLETED: 'Tamamlandı',
   CANCELLED: 'İptal Edildi',
+  NO_SHOW:   'Gerçekleşmedi',
+  UNCERTAIN: 'Belirsiz',
 };
 
 const STATUS_CLASS: Record<Appointment['status'], string> = {
@@ -17,6 +19,8 @@ const STATUS_CLASS: Record<Appointment['status'], string> = {
   SCHEDULED: 'badge badge-appt-scheduled',
   COMPLETED: 'badge badge-appt-completed',
   CANCELLED: 'badge badge-appt-cancelled',
+  NO_SHOW:   'badge badge-appt-cancelled',
+  UNCERTAIN: 'badge badge-appt-pending',
 };
 
 function formatDate(iso: string) {

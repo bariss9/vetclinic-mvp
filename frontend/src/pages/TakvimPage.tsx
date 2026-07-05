@@ -1,11 +1,30 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api';
-import type { Appointment, MedicalRecord, AnamnesisData } from '../api';
+import type { Appointment, AppointmentStatus, MedicalRecord, AnamnesisData } from '../api';
 import Layout from '../components/Layout';
 import AnamnesisStructured from '../components/AnamnesisStructured';
 
 const MONTH_NAMES = ['Ocak','Şubat','Mart','Nisan','Mayıs','Haziran','Temmuz','Ağustos','Eylül','Ekim','Kasım','Aralık'];
 const DAY_LABELS  = ['Pzt','Sal','Çar','Per','Cum','Cmt','Paz'];
+
+// SCHEDULED mevcut koyu rengi korur (ek sınıf yok)
+const STATUS_CLASS: Record<AppointmentStatus, string> = {
+  SCHEDULED: '',
+  COMPLETED: ' takvim-event-completed',
+  NO_SHOW:   ' takvim-event-noshow',
+  UNCERTAIN: ' takvim-event-uncertain',
+  CANCELLED: ' takvim-event-cancelled',
+  PENDING:   ' takvim-event-pending',
+};
+
+const STATUS_LABEL: Record<AppointmentStatus, string> = {
+  PENDING:   'Beklemede',
+  SCHEDULED: 'Planlandı',
+  COMPLETED: 'Yapıldı',
+  NO_SHOW:   'Gerçekleşmedi',
+  UNCERTAIN: 'Belirsiz',
+  CANCELLED: 'İptal Edildi',
+};
 
 function isSameDay(a: Date, b: Date) {
   return a.getFullYear() === b.getFullYear()
@@ -39,8 +58,7 @@ export default function TakvimPage() {
   async function loadAppointments() {
     setLoading(true);
     try {
-      const all = await api.getAppointments();
-      setAppointments(all.filter(a => a.status === 'SCHEDULED'));
+      setAppointments(await api.getAppointments());
     } finally {
       setLoading(false);
     }
@@ -69,7 +87,9 @@ export default function TakvimPage() {
     setCancelling(true);
     try {
       await api.updateAppointment(selected.id, { status: 'CANCELLED' });
-      setAppointments(prev => prev.filter(a => a.id !== selected.id));
+      setAppointments(prev =>
+        prev.map(a => (a.id === selected.id ? { ...a, status: 'CANCELLED' as const } : a))
+      );
       setSelected(null);
     } finally {
       setCancelling(false);
@@ -124,7 +144,7 @@ export default function TakvimPage() {
                     {dayAppts.map(appt => (
                       <button
                         key={appt.id}
-                        className="takvim-event"
+                        className={`takvim-event${STATUS_CLASS[appt.status]}`}
                         onClick={() => openModal(appt)}
                       >
                         <span className="takvim-event-time">
@@ -141,7 +161,7 @@ export default function TakvimPage() {
             {appointments.length === 0 && (
               <div className="empty-state" style={{ marginTop: '2rem' }}>
                 <div className="empty-state-icon">📅</div>
-                <p className="empty-state-text">Bu ay için onaylı randevu yok.</p>
+                <p className="empty-state-text">Randevu bulunmuyor.</p>
               </div>
             )}
           </div>
@@ -155,7 +175,7 @@ export default function TakvimPage() {
             <button className="takvim-modal-close" onClick={() => setSelected(null)}>✕</button>
 
             <div className="takvim-modal-header">
-              <span className="badge badge-ai" style={{ fontSize: '.75rem' }}>SCHEDULED</span>
+              <span className="badge badge-ai" style={{ fontSize: '.75rem' }}>{STATUS_LABEL[selected.status]}</span>
               <h2 className="takvim-modal-title">{selected.patient.name}</h2>
               <p className="takvim-modal-date">
                 {new Date(selected.date).toLocaleDateString('tr-TR', {
@@ -199,13 +219,15 @@ export default function TakvimPage() {
             </div>
 
             <div className="takvim-modal-footer">
-              <button
-                className="btn-danger"
-                onClick={handleCancel}
-                disabled={cancelling}
-              >
-                {cancelling ? 'İptal ediliyor…' : 'Randevuyu İptal Et'}
-              </button>
+              {(selected.status === 'PENDING' || selected.status === 'SCHEDULED') && (
+                <button
+                  className="btn-danger"
+                  onClick={handleCancel}
+                  disabled={cancelling}
+                >
+                  {cancelling ? 'İptal ediliyor…' : 'Randevuyu İptal Et'}
+                </button>
+              )}
               <button className="btn-ghost" onClick={() => setSelected(null)}>Kapat</button>
             </div>
           </div>

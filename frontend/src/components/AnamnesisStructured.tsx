@@ -13,7 +13,6 @@ const TOPIC_LABELS = [
 export function parseAnamnesis(data: AnamnesisData): { label: string; answer: string }[] {
   const userAnswers = data.messages
     .filter(m => m.role === 'user')
-    .slice(1)
     .map(m => m.text);
 
   return TOPIC_LABELS.map((label, i) => ({

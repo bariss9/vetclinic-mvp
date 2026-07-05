@@ -83,7 +83,7 @@ export default function Layout({ children }: LayoutProps) {
           {role === 'CLINIC' ? (
             <>
               <NavItem to="/patients"           icon={iconUsers}        label="Hastalar" />
-              <NavItem to="/randevu-istekleri"  icon={iconInbox}        label="Randevu İstekleri" />
+              <NavItem to="/randevu-istekleri"  icon={iconInbox}        label="Randevular" />
               <NavItem to="/takvim"             icon={iconGrid}         label="Takvim" />
             </>
           ) : (

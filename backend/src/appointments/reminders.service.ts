@@ -18,6 +18,23 @@ export class RemindersService {
     await this.runReminders();
   }
 
+  // Her gün saat 08:00 — tarihi 2+ gün geçmiş ve hâlâ SCHEDULED kalan randevuları
+  // UNCERTAIN'e çeker. reminderSent'ten bağımsız, ayrı bir otomatik geçiştir.
+  @Cron('0 8 * * *')
+  async markStaleAppointments(): Promise<number> {
+    const now = new Date();
+    // dünün 00:00'ından önceki randevular = tarihi en az 2 gün geçmiş
+    const cutoff = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+    const result = await this.prisma.appointment.updateMany({
+      where: { status: 'SCHEDULED', date: { lt: cutoff } },
+      data:  { status: 'UNCERTAIN' },
+    });
+    if (result.count > 0) {
+      this.logger.log(`${result.count} randevu UNCERTAIN'e çekildi (tarihi 2+ gün geçmiş, hâlâ SCHEDULED)`);
+    }
+    return result.count;
+  }
+
   async runReminders(): Promise<{ sent: number; failed: number }> {
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
