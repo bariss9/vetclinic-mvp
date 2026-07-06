@@ -1,7 +1,6 @@
-import { Controller, Get, Post, Put, Delete, Body, Param, ParseIntPipe, Query, Req, UseGuards, ForbiddenException } from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Body, Param, ParseIntPipe, Query, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
 import { AppointmentsService } from './appointments.service';
-import { RemindersService } from './reminders.service';
 import { CreateAppointmentDto, UpdateAppointmentDto } from './appointments.dto';
 import { JwtAuthGuard, JwtPayload } from '../auth/jwt-auth.guard';
 
@@ -10,10 +9,7 @@ type AuthRequest = Request & { user: JwtPayload };
 @UseGuards(JwtAuthGuard)
 @Controller('appointments')
 export class AppointmentsController {
-  constructor(
-    private readonly appointmentsService: AppointmentsService,
-    private readonly remindersService: RemindersService,
-  ) {}
+  constructor(private readonly appointmentsService: AppointmentsService) {}
 
   @Get()
   findAll(@Query('patientId') patientId: string | undefined, @Req() req: AuthRequest) {
@@ -41,14 +37,5 @@ export class AppointmentsController {
   @Delete(':id')
   remove(@Param('id', ParseIntPipe) id: number, @Req() req: AuthRequest) {
     return this.appointmentsService.remove(id, req.user.sub, req.user.role);
-  }
-
-  // DEV ONLY — prod'da kaldır; sadece CLINIC tetikleyebilir
-  @Post('trigger-reminders')
-  triggerReminders(@Req() req: AuthRequest) {
-    if (req.user.role !== 'CLINIC') {
-      throw new ForbiddenException('Bu işlemi yalnızca klinik hesapları tetikleyebilir');
-    }
-    return this.remindersService.runReminders();
   }
 }
