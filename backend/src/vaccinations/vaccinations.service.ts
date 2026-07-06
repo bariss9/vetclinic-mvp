@@ -1,9 +1,10 @@
-import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { VaccinationStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateVaccinationDto, UpdateVaccinationDto } from './vaccinations.dto';
 
 const CLINIC_SELECT = { id: true, name: true } as const;
+const PATIENT_SELECT = { id: true, name: true, species: true, breed: true, age: true } as const;
 
 @Injectable()
 export class VaccinationsService {
@@ -24,7 +25,19 @@ export class VaccinationsService {
     return record;
   }
 
-  async findByPatient(patientId: number, callerId: number, callerRole: string) {
+  async findAll(patientId: number | undefined, callerId: number, callerRole: string) {
+    if (patientId === undefined) {
+      // CLINIC tüm kayıtları çekebilir (takvim görünümü); OWNER için patientId zorunlu
+      if (callerRole !== 'CLINIC') throw new BadRequestException('patientId zorunludur');
+      return this.prisma.vaccinationRecord.findMany({
+        include: {
+          createdByClinic: { select: CLINIC_SELECT },
+          patient:         { select: PATIENT_SELECT },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+    }
+
     const patient = await this.prisma.patient.findUnique({ where: { id: patientId } });
     if (!patient) throw new NotFoundException(`Patient #${patientId} not found`);
     if (callerRole === 'OWNER' && patient.ownerId !== callerId) {

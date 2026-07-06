@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Put, Delete, Body, Param, ParseIntPipe, Query, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Body, Param, ParseIntPipe, Query, Req, UseGuards, ForbiddenException } from '@nestjs/common';
 import type { Request } from 'express';
 import { AppointmentsService } from './appointments.service';
 import { RemindersService } from './reminders.service';
@@ -43,9 +43,12 @@ export class AppointmentsController {
     return this.appointmentsService.remove(id, req.user.sub, req.user.role);
   }
 
-  // DEV ONLY — prod'da kaldır veya guard arkasına al
+  // DEV ONLY — prod'da kaldır; sadece CLINIC tetikleyebilir
   @Post('trigger-reminders')
-  triggerReminders() {
+  triggerReminders(@Req() req: AuthRequest) {
+    if (req.user.role !== 'CLINIC') {
+      throw new ForbiddenException('Bu işlemi yalnızca klinik hesapları tetikleyebilir');
+    }
     return this.remindersService.runReminders();
   }
 }

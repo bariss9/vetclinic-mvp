@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api';
-import type { Appointment, AppointmentStatus, MedicalRecord, AnamnesisData } from '../api';
+import type { Appointment, AppointmentStatus, MedicalRecord, AnamnesisData, VaccinationRecord } from '../api';
 import Layout from '../components/Layout';
 import AnamnesisStructured from '../components/AnamnesisStructured';
 
@@ -26,6 +26,22 @@ const STATUS_LABEL: Record<AppointmentStatus, string> = {
   CANCELLED: 'İptal Edildi',
 };
 
+const MONTHS_TR = ['Oca', 'Şub', 'Mar', 'Nis', 'May', 'Haz', 'Tem', 'Ağu', 'Eyl', 'Eki', 'Kas', 'Ara'];
+
+// ISO string'den timezone bağımsız gün formatı (bkz. CLAUDE.md dateStr prensibi)
+function vaccDateStr(iso: string | null): string {
+  if (!iso) return '—';
+  const [year, month, day] = iso.slice(0, 10).split('-').map(Number);
+  return `${day} ${MONTHS_TR[month - 1]} ${year}`;
+}
+
+// Takvim hücresinin lokal tarihini YYYY-MM-DD'ye çevirir (nextDueDate eşleşmesi için)
+function cellIsoDay(d: Date): string {
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${mm}-${dd}`;
+}
+
 function isSameDay(a: Date, b: Date) {
   return a.getFullYear() === b.getFullYear()
       && a.getMonth()    === b.getMonth()
@@ -46,19 +62,26 @@ function buildCells(year: number, month: number): (Date | null)[] {
 
 export default function TakvimPage() {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [vaccinations, setVaccinations] = useState<VaccinationRecord[]>([]);
   const [loading, setLoading]           = useState(true);
   const [viewDate, setViewDate]         = useState(() => new Date());
   const [selected, setSelected]         = useState<Appointment | null>(null);
+  const [selectedVacc, setSelectedVacc] = useState<VaccinationRecord | null>(null);
   const [anamnesis, setAnamnesis]       = useState<MedicalRecord | null>(null);
   const [anamnesisLoading, setAnamnesisLoading] = useState(false);
   const [cancelling, setCancelling]     = useState(false);
 
-  useEffect(() => { loadAppointments(); }, []);
+  useEffect(() => { loadData(); }, []);
 
-  async function loadAppointments() {
+  async function loadData() {
     setLoading(true);
     try {
-      setAppointments(await api.getAppointments());
+      const [appts, vaccs] = await Promise.all([
+        api.getAppointments(),
+        api.getAllVaccinations(),
+      ]);
+      setAppointments(appts);
+      setVaccinations(vaccs);
     } finally {
       setLoading(false);
     }
@@ -136,6 +159,10 @@ export default function TakvimPage() {
                 if (!date) return <div key={`empty-${i}`} className="takvim-cell takvim-cell-empty" />;
                 const isToday = isSameDay(date, today);
                 const dayAppts = appointments.filter(a => isSameDay(new Date(a.date), date));
+                const dayIso = cellIsoDay(date);
+                const dayVaccs = vaccinations.filter(
+                  v => v.status === 'PLANNED' && v.nextDueDate?.slice(0, 10) === dayIso
+                );
                 return (
                   <div key={date.toISOString()} className={`takvim-cell${isToday ? ' takvim-cell-today' : ''}`}>
                     <span className={`takvim-day-num${isToday ? ' takvim-day-num-today' : ''}`}>
@@ -151,6 +178,15 @@ export default function TakvimPage() {
                           {new Date(appt.date).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })}
                         </span>
                         <span className="takvim-event-name">{appt.patient.name}</span>
+                      </button>
+                    ))}
+                    {dayVaccs.map(vacc => (
+                      <button
+                        key={`vacc-${vacc.id}`}
+                        className="takvim-event takvim-event-vaccine"
+                        onClick={() => setSelectedVacc(vacc)}
+                      >
+                        <span className="takvim-event-name">💉 {vacc.vaccineName}</span>
                       </button>
                     ))}
                   </div>
@@ -229,6 +265,41 @@ export default function TakvimPage() {
                 </button>
               )}
               <button className="btn-ghost" onClick={() => setSelected(null)}>Kapat</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Aşı modalı ── */}
+      {selectedVacc && (
+        <div className="takvim-overlay" onClick={() => setSelectedVacc(null)}>
+          <div className="takvim-modal" onClick={e => e.stopPropagation()}>
+            <button className="takvim-modal-close" onClick={() => setSelectedVacc(null)}>✕</button>
+
+            <div className="takvim-modal-header">
+              <span className="badge badge-ai" style={{ fontSize: '.75rem' }}>Planlanmış Aşı</span>
+              <h2 className="takvim-modal-title">💉 {selectedVacc.vaccineName}</h2>
+              <p className="takvim-modal-date">{vaccDateStr(selectedVacc.nextDueDate)}</p>
+            </div>
+
+            <div className="takvim-modal-section">
+              <p className="takvim-modal-label">Hasta</p>
+              <p className="takvim-modal-value">
+                {selectedVacc.patient
+                  ? `${selectedVacc.patient.name} · ${selectedVacc.patient.species} · ${selectedVacc.patient.breed} · ${selectedVacc.patient.age} yaşında`
+                  : '—'}
+              </p>
+            </div>
+
+            {selectedVacc.notes && (
+              <div className="takvim-modal-section">
+                <p className="takvim-modal-label">Notlar</p>
+                <p className="takvim-modal-value">{selectedVacc.notes}</p>
+              </div>
+            )}
+
+            <div className="takvim-modal-footer">
+              <button className="btn-ghost" onClick={() => setSelectedVacc(null)}>Kapat</button>
             </div>
           </div>
         </div>

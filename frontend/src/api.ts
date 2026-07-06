@@ -79,6 +79,9 @@ export const api = {
   getVaccinations: (patientId: number) =>
     req<VaccinationRecord[]>('GET', `/vaccinations?patientId=${patientId}`),
 
+  getAllVaccinations: () =>
+    req<VaccinationRecord[]>('GET', '/vaccinations'),
+
   createVaccination: (data: CreateVaccinationInput) =>
     req<VaccinationRecord>('POST', '/vaccinations', data),
 
@@ -99,6 +102,8 @@ export interface VaccinationRecord {
   notes: string | null;
   createdByClinicId: number;
   createdByClinic: { id: number; name: string };
+  // sadece parametresiz GET /vaccinations (CLINIC takvim görünümü) döndürür
+  patient?: { id: number; name: string; species: string; breed: string; age: number };
   createdAt: string;
   updatedAt: string;
 }

@@ -12,7 +12,7 @@ The goal is:
 
 ---
 
-## CURRENT PROJECT STATUS (updated 2026-07-05)
+## CURRENT PROJECT STATUS (updated 2026-07-06)
 
 ### Completed — All modules built and working
 
@@ -24,9 +24,9 @@ The goal is:
 - **medical-records** — CRUD, symptoms[], aiResult JSON, anamnesis JSON, notes; **JWT guard + ownership filtering** (patients ile aynı pattern: `record.patient.ownerId`)
 - **appointments** — CRUD, status enum (PENDING/SCHEDULED/COMPLETED/CANCELLED/NO_SHOW/UNCERTAIN — migration: `add_appointment_status_values`); GET returns full patient + owner info; **JWT guard + ownership filtering**; **rol bazlı status geçiş kısıtları** (bkz. Randevu Durum Yönetimi); `reminderSent Boolean @default(false)` alanı (migration: `add_appointment_reminder`); günlük cron (09:00) yarınki SCHEDULED randevular için owner'a hatırlatma maili; günlük cron (08:00) tarihi 2+ gün geçmiş SCHEDULED randevuları UNCERTAIN'e çeker; DEV-ONLY: POST /appointments/trigger-reminders
 - **mail** — `src/mail/mail.module.ts` (@Global); `MailService.sendMail(to, subject, html): Promise<boolean>` — Resend API, başarıda `true`, hatada `false` (exception fırlatmaz, logger.error loglar); **çağıranlar dönüş değerini kontrol etmeli**
-- **ai** — POST /ai/diagnose (Anthropic key placeholder, currently returns structured mock)
-- **anamnesis** — POST /anamnesis/next-question (start flow), POST /anamnesis/validate-answer (Groq 0-100 score, threshold 55), POST /anamnesis/chat (legacy, kept), POST /anamnesis/save
-- **vaccinations** — `src/vaccinations/`; VaccinationRecord entity; migration: `add_vaccination_tracking`; GET /vaccinations?patientId=N (OWNER kendi hastasıyla sınırlı, CLINIC filtresiz), POST/PUT/DELETE sadece CLINIC (OWNER → 403); PUT/DELETE ek kısıt: sadece oluşturan klinik kendi kaydını değiştirebilir (`createdByClinicId === clinic.id`); `resolveClinic(userId)` helper clinic ID'yi JWT sub'undan çeker
+- **ai** — POST /ai/diagnose (Anthropic key placeholder, currently returns structured mock); **JWT guard + ownership** (2026-07-06): class seviyesinde `@UseGuards(JwtAuthGuard)`, `diagnose()` medicalRecord→patient.ownerId kontrolü (OWNER yabancı kayıt → 403)
+- **anamnesis** — POST /anamnesis/next-question (start flow), POST /anamnesis/validate-answer (Groq 0-100 score, threshold 55), POST /anamnesis/chat (legacy, kept), POST /anamnesis/save; **JWT guard + ownership** (2026-07-06): class seviyesinde `@UseGuards(JwtAuthGuard)`, `save()` patientId→ownerId kontrolü (OWNER yabancı hasta → 403); Groq hata detayları artık istemciye sızmıyor (logger.error'a taşındı, istemciye "Servis geçici olarak kullanılamıyor")
+- **vaccinations** — `src/vaccinations/`; VaccinationRecord entity; migration: `add_vaccination_tracking`; GET /vaccinations?patientId=N (OWNER kendi hastasıyla sınırlı, CLINIC filtresiz); **patientId CLINIC için opsiyonel** (2026-07-06): parametresiz GET → CLINIC tüm kayıtları alır (`include: { patient }` — takvim görünümü için), OWNER parametresiz → 400, geçersiz sayı → 400; POST/PUT/DELETE sadece CLINIC (OWNER → 403); PUT/DELETE ek kısıt: sadece oluşturan klinik kendi kaydını değiştirebilir (`createdByClinicId === clinic.id`); `resolveClinic(userId)` helper clinic ID'yi JWT sub'undan çeker
 
 #### Frontend (React + Vite, running on http://localhost:5173)
 
@@ -46,7 +46,7 @@ The goal is:
 - **PatientsPage** — "Hastalar"; add patient includes optional 7-topic anamnesis form + Hekim Notu; delete patient button with custom confirm modal; cascade delete on backend
 - **PatientDetailPage** — shows anamnesis MedicalRecords in collapsible accordion (AnamnesisStructured); shows Hekim Notu if set; "Aşı Takibi" bölümü: ekleme/düzenleme/silme formu (CLINIC), salt okunur liste (OWNER); Uygulananlar (ADMINISTERED) ve Planlanmış (PLANNED) ayrı gruplandırılmış
 - **RandevuIstekleriPage** — sidebar adı "Randevular"; iki sekme (`tab-bar`): **"Randevu İstekleri"** (PENDING; approve → SCHEDULED, reject → CANCELLED — onaylanan kart anında ikinci sekmeye taşınır) ve **"Planlanmış Randevular"** (SCHEDULED; "Yapıldı" → COMPLETED, "Gerçekleşmedi" → NO_SHOW); her kartta AnamnesisStructured
-- **TakvimPage** — monthly calendar grid (Mon-Sun, Monday-start); **tüm status'lar** gösterilir, renk haritası: SCHEDULED lacivert (varsayılan), COMPLETED yeşil, NO_SHOW kırmızı, UNCERTAIN sarı, CANCELLED gri+üstü çizili, PENDING soluk lacivert; click → modal (Türkçe status rozeti, owner name, patient info, AnamnesisStructured); iptal butonu sadece PENDING/SCHEDULED'da görünür, iptal sonrası kart takvimde gri/çizgili kalır
+- **TakvimPage** — monthly calendar grid (Mon-Sun, Monday-start); **tüm status'lar** gösterilir, renk haritası: SCHEDULED lacivert (varsayılan), COMPLETED yeşil, NO_SHOW kırmızı, UNCERTAIN sarı, CANCELLED gri+üstü çizili, PENDING soluk lacivert; click → modal (Türkçe status rozeti, owner name, patient info, AnamnesisStructured); iptal butonu sadece PENDING/SCHEDULED'da görünür, iptal sonrası kart takvimde gri/çizgili kalır; **aşı planları da gösterilir** (2026-07-06): `getAllVaccinations()` randevularla `Promise.all` ile paralel çekilir, `status=PLANNED && nextDueDate` dolu kayıtlar mor kutucukta ("💉 [aşı adı]", `takvim-event-vaccine` sınıfı, #7c3aed); gün eşleşmesi timezone bağımsız — `nextDueDate.slice(0,10)` ile hücrenin lokal YYYY-MM-DD'si karşılaştırılır (dateStr prensibi); tıklayınca basit aşı modalı (aşı adı, hasta, planlanan tarih `vaccDateStr` ile, notlar)
 
 **Components**
 - **AnamnesisChat** — chatbot UI; now uses validation-based flow (next-question + validate-answer); no ANAMNESIS_COMPLETE token needed; QAPair key'leri `QUESTION_KEYS` sabitiyle backend anahtarlarını kullanır (chief_complaint, duration vb. — DB'ye yazılan summary Türkçe etiketli); her soru geldikten sonra input'a auto-focus (`inputRef` + `useEffect`); 7. cevap sonrası `onComplete` **1500ms gecikmeli** çağrılır (kapanış balonu görünsün diye; unmount'ta `clearTimeout`)
@@ -103,7 +103,7 @@ Each entry also has a `retryQuestion` (hardcoded Turkish rephrase) used when sco
 | max_tokens | `20` |
 | Timeout | 15 seconds (AbortController) |
 | Score threshold | `>= 55` = valid, `< 55` = invalid/retry |
-| System prompt | Lenient: short topical answers (1-3 words like "halsiz", "yemiyor") score 80+; only score LOW if completely unrelated, empty, or dismissive |
+| System prompt | Lenient: short topical answers (1-3 words like "halsiz", "yemiyor") score 80+; **kısa negatif cevaplar geçerli** (2026-07-06): "hayır", "yok", "normal", "değişiklik yok", "her zamanki gibi", "iyi" → 90+; belirsizlik cevapları ("bilmiyorum", "emin değilim", "fark etmedim") → 75+ (bilgi eksikliği klinik olarak anlamlı); only score LOW (under 40) if completely unrelated, empty, or rude/dismissive ('bilmem' LOW örneklerinden çıkarıldı) |
 | Response format | `{"score": N}` — parsed with regex to handle any Groq markdown wrapping |
 
 ### Blocklist (checked BEFORE calling Groq)
@@ -224,6 +224,17 @@ Use `backend/.env.example` as template. `.env` is gitignored and must be recreat
 - Exception fırlatmaz DI bağımlılığı yoktur — doğrudan `@UseGuards(JwtAuthGuard)` ile kullanılır
 - İlgili modüllerin `providers` dizisine `JwtAuthGuard` eklenmeli (PatientsModule, MedicalRecordsModule, AppointmentsModule, VaccinationsModule)
 
+### Güvenlik Sertleştirmeleri (2026-07-06)
+- **JWT_SECRET fallback kaldırıldı**: `?? 'secret'` ifadeleri `jwt-auth.guard.ts` ve `users.module.ts`'ten silindi; `main.ts` bootstrap'ta `JWT_SECRET` yoksa `throw` (uygulama açılmaz). Fail-open → fail-closed
+- **Rate limiting** (`@nestjs/throttler`): `ThrottlerModule.forRoot([{ ttl: 60s, limit: 30 }])` AppModule'de; `UsersController`'da `@UseGuards(ThrottlerGuard)` + rota bazlı `@Throttle`: register 5/dk, login 10/dk, resend-verification 3/dk, verify-email 10/2dk
+- **verify-email brute force sayacı**: `users.service.ts` in-memory `Map` — email başına max 5 hatalı deneme / 10 dk, aşılırsa 429 (throttler'dan bağımsız, koda özel katman). Başarılı doğrulamada sayaç sıfırlanır. NOT: in-memory olduğu için tek instance'a özgü — çok-instance prod'da Redis'e taşınmalı
+- **Doğrulama kodu**: `Math.random()` → `crypto.randomInt(100000, 1000000)` (CSPRNG)
+- **User enumeration önlemi**: register artık doğrulanmış email için de 409 yerine jenerik "kod gönderildi" mesajı döner (mail gitmez)
+- **Hesap gaspı önlemi**: register doğrulanmamış mevcut kullanıcının şifre/isim bilgilerini ÜZERİNE YAZMAZ — sadece yeni kod üretir
+- **AI/Anamnesis guard**: bkz. yukarıdaki modül notları (K1)
+- **trigger-reminders**: sadece CLINIC (OWNER → 403)
+- **O1 patients create**: `ownerId` OWNER için JWT `sub`'undan zorlanır (body yok sayılır), CLINIC body'deki `ownerId`'yi kullanır (başkası adına ekleme meşru)
+
 ### Güvenlik: Ownership Filtering
 Daha önce patients/medical-records/appointments endpoint'lerinde JWT guard YOKTU — herkes herkesin verisine erişebiliyordu. Bu 2026-06-30'da kapatıldı:
 - **OWNER**: sadece kendi `ownerId`'sine ait kayıtları görür/değiştirir; yabancı kayda erişim → 403
@@ -294,6 +305,7 @@ Daha önce patients/medical-records/appointments endpoint'lerinde JWT guard YOKT
 | Method | Endpoint | OWNER | CLINIC |
 |---|---|---|---|
 | GET | /vaccinations?patientId=N | Kendi hastası → 200, yabancı → 403 | Filtresiz |
+| GET | /vaccinations (patientId yok) | 400 | Tüm kayıtlar + `patient` include (takvim) |
 | POST | /vaccinations | 403 | ✓ |
 | PUT | /vaccinations/:id | 403 | Sadece `createdByClinicId === clinic.id` |
 | DELETE | /vaccinations/:id | 403 | Sadece `createdByClinicId === clinic.id` |

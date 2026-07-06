@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 // import Anthropic from '@anthropic-ai/sdk';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -18,9 +18,15 @@ export class AiService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  async diagnose(dto: DiagnoseDto) {
-    const record = await this.prisma.medicalRecord.findUnique({ where: { id: dto.medicalRecordId } });
+  async diagnose(dto: DiagnoseDto, callerId: number, callerRole: string) {
+    const record = await this.prisma.medicalRecord.findUnique({
+      where: { id: dto.medicalRecordId },
+      include: { patient: { select: { ownerId: true } } },
+    });
     if (!record) throw new NotFoundException(`MedicalRecord #${dto.medicalRecordId} not found`);
+    if (callerRole === 'OWNER' && record.patient.ownerId !== callerId) {
+      throw new ForbiddenException('Bu kayda erişim yetkiniz yok');
+    }
 
     // const prompt = `You are a veterinary AI assistant providing decision support only. Analyze the following case and respond with ONLY a valid JSON object — no markdown, no explanation, just raw JSON.
     //

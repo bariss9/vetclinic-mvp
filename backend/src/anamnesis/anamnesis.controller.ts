@@ -1,7 +1,12 @@
-import { Controller, Post, Body } from '@nestjs/common';
+import { Controller, Post, Body, Req, UseGuards } from '@nestjs/common';
+import type { Request } from 'express';
 import { AnamnesisService } from './anamnesis.service';
 import { ChatDto, SaveAnamnesisDto, NextQuestionDto, ValidateAnswerDto } from './anamnesis.dto';
+import { JwtAuthGuard, JwtPayload } from '../auth/jwt-auth.guard';
 
+type AuthRequest = Request & { user: JwtPayload };
+
+@UseGuards(JwtAuthGuard)
 @Controller('anamnesis')
 export class AnamnesisController {
   constructor(private readonly anamnesisService: AnamnesisService) {}
@@ -22,7 +27,7 @@ export class AnamnesisController {
   }
 
   @Post('save')
-  save(@Body() dto: SaveAnamnesisDto) {
-    return this.anamnesisService.save(dto);
+  save(@Body() dto: SaveAnamnesisDto, @Req() req: AuthRequest) {
+    return this.anamnesisService.save(dto, req.user.sub, req.user.role);
   }
 }

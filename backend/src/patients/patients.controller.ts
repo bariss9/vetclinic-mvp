@@ -22,8 +22,8 @@ export class PatientsController {
   }
 
   @Post()
-  create(@Body() dto: CreatePatientDto) {
-    return this.patientsService.create(dto);
+  create(@Body() dto: CreatePatientDto, @Req() req: AuthRequest) {
+    return this.patientsService.create(dto, req.user.sub, req.user.role);
   }
 
   @Put(':id')

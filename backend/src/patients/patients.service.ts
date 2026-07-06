@@ -29,9 +29,11 @@ export class PatientsService {
     return patient;
   }
 
-  create(dto: CreatePatientDto) {
+  create(dto: CreatePatientDto, callerId: number, callerRole: string) {
+    // OWNER kendi adına ekler (body'deki ownerId yok sayılır); CLINIC başkası adına ekleyebilir
+    const ownerId = callerRole === 'OWNER' ? callerId : dto.ownerId;
     return this.prisma.patient.create({
-      data: dto,
+      data: { ...dto, ownerId },
       include: { owner: { select: { id: true, email: true } } },
     });
   }

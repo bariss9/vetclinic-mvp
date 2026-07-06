@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, InternalServerErrorException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, InternalServerErrorException, BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ChatDto, SaveAnamnesisDto, ChatMessageDto, NextQuestionDto, ValidateAnswerDto } from './anamnesis.dto';
@@ -107,6 +107,8 @@ function formatHistory(history: ChatMessageDto[]) {
 
 @Injectable()
 export class AnamnesisService {
+  private readonly logger = new Logger(AnamnesisService.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   async chat(dto: ChatDto) {
@@ -114,8 +116,7 @@ export class AnamnesisService {
     if (!patient) throw new NotFoundException(`Patient #${dto.patientId} not found`);
 
     const apiKey = process.env.GROQ_API_KEY;
-    console.log('[Groq] key prefix:', apiKey ? apiKey.slice(0, 10) + '...' : 'NOT SET');
-    if (!apiKey) throw new InternalServerErrorException('GROQ_API_KEY is not configured');
+    if (!apiKey) throw new InternalServerErrorException('Servis geçici olarak kullanılamıyor');
 
     const userMessageCount = dto.history.filter(m => m.role === 'user').length;
     const irrelevantInHistory = dto.history.filter(m => m.role === 'user' && isIrrelevantAnswer(m.text)).length;
@@ -159,10 +160,8 @@ export class AnamnesisService {
       });
     } catch (err: unknown) {
       const isTimeout = err instanceof Error && err.name === 'AbortError';
-      console.error(`[Groq] fetch failed after ${Date.now() - startMs}ms:`, isTimeout ? 'TIMEOUT after 45s' : err);
-      throw new InternalServerErrorException(
-        isTimeout ? 'Groq API timed out after 45 seconds' : 'Groq API request failed',
-      );
+      this.logger.error(`Groq fetch failed after ${Date.now() - startMs}ms: ${isTimeout ? 'TIMEOUT after 45s' : String(err)}`);
+      throw new InternalServerErrorException('Servis geçici olarak kullanılamıyor');
     } finally {
       clearTimeout(timeout);
     }
@@ -171,7 +170,9 @@ export class AnamnesisService {
     console.log(`[Groq] status=${res.status} duration=${Date.now() - startMs}ms body=${rawBody.slice(0, 500)}`);
 
     if (!res.ok) {
-      throw new InternalServerErrorException(`Groq API error: ${rawBody}`);
+      // Upstream hata detayı istemciye sızdırılmaz — sadece loglanır
+      this.logger.error(`Groq API error (chat): status=${res.status} body=${rawBody.slice(0, 500)}`);
+      throw new InternalServerErrorException('Servis geçici olarak kullanılamıyor');
     }
 
     const data = JSON.parse(rawBody) as {
@@ -193,7 +194,7 @@ export class AnamnesisService {
 
   async validateAnswer(dto: ValidateAnswerDto) {
     const apiKey = process.env.GROQ_API_KEY;
-    if (!apiKey) throw new InternalServerErrorException('GROQ_API_KEY is not configured');
+    if (!apiKey) throw new InternalServerErrorException('Servis geçici olarak kullanılamıyor');
 
     const current = QUESTIONS[dto.questionIndex];
     if (!current) throw new BadRequestException(`Invalid questionIndex: ${dto.questionIndex}`);
@@ -208,7 +209,7 @@ export class AnamnesisService {
       messages: [
         {
           role: 'system',
-          content: 'You are scoring how relevant a pet owner\'s answer is to a veterinary question. Be LENIENT — pet owners often give short, casual answers (1-3 words) and these should score HIGH if they are topically relevant, even without full sentences. For example, for a question about lethargy or main complaint, answers like \'halsiz\', \'yemiyor\', \'kusuyor\' should score 80+. Only score LOW (under 40) if the answer is completely unrelated, empty, or dismissive (e.g. \'sus\', \'bilmem\', random characters). Output ONLY {"score": N}.',
+          content: 'You are scoring how relevant a pet owner\'s answer is to a veterinary question. Be LENIENT — pet owners often give short, casual answers (1-3 words) and these should score HIGH if they are topically relevant, even without full sentences. For example, for a question about lethargy or main complaint, answers like \'halsiz\', \'yemiyor\', \'kusuyor\' should score 80+. Short NEGATIVE answers that report no change or absence are FULLY VALID answers, especially for yes/no questions: \'hayır\', \'yok\', \'normal\', \'değişiklik yok\', \'her zamanki gibi\', \'iyi\', \'gayet iyi\' should score 90+. Uncertainty answers are also VALID because the owner\'s lack of knowledge is clinically meaningful information: \'bilmiyorum\', \'emin değilim\', \'fark etmedim\' should score 75+. Calibration examples: \'hayır\' -> 90, \'yok\' -> 90, \'normal\' -> 90, \'bilmiyorum\' -> 75. Only score LOW (under 40) if the answer is completely unrelated, empty, or rude/dismissive (e.g. \'sus\', random characters). Output ONLY {"score": N}.',
         },
         {
           role: 'user',
@@ -235,16 +236,19 @@ export class AnamnesisService {
       });
     } catch (err: unknown) {
       const isTimeout = err instanceof Error && err.name === 'AbortError';
-      throw new InternalServerErrorException(
-        isTimeout ? 'Groq API timed out' : 'Groq API request failed',
-      );
+      this.logger.error(`Groq fetch failed (validate): ${isTimeout ? 'TIMEOUT after 15s' : String(err)}`);
+      throw new InternalServerErrorException('Servis geçici olarak kullanılamıyor');
     } finally {
       clearTimeout(timeout);
     }
 
     const rawBody = await res.text();
     console.log(`[Groq/validate] q=${dto.questionIndex} status=${res.status} body=${rawBody.slice(0, 200)}`);
-    if (!res.ok) throw new InternalServerErrorException(`Groq API error: ${rawBody}`);
+    if (!res.ok) {
+      // Upstream hata detayı istemciye sızdırılmaz — sadece loglanır
+      this.logger.error(`Groq API error (validate): status=${res.status} body=${rawBody.slice(0, 500)}`);
+      throw new InternalServerErrorException('Servis geçici olarak kullanılamıyor');
+    }
 
     let score = 0;
     try {
@@ -271,9 +275,12 @@ export class AnamnesisService {
     return { valid: false, retryQuestion: current.retryQuestion };
   }
 
-  async save(dto: SaveAnamnesisDto) {
+  async save(dto: SaveAnamnesisDto, callerId: number, callerRole: string) {
     const patient = await this.prisma.patient.findUnique({ where: { id: dto.patientId } });
     if (!patient) throw new NotFoundException(`Patient #${dto.patientId} not found`);
+    if (callerRole === 'OWNER' && patient.ownerId !== callerId) {
+      throw new ForbiddenException('Bu hastaya erişim yetkiniz yok');
+    }
 
     return this.prisma.medicalRecord.create({
       data: {
