@@ -47,6 +47,7 @@ model Appointment {
   clinicLon      Float?
   anamnesisId    String?
   reminderSent   Boolean           @default(false)
+  reminderCount  Int               @default(0)
   createdAt      DateTime          @default(now())
   updatedAt      DateTime          @updatedAt
 }

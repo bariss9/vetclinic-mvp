@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { api } from '../api';
-import type { Patient, ChatMessage, AnamnesisData } from '../api';
+import type { Patient, ChatMessage, AnamnesisData, AvailableSlot } from '../api';
 import Layout from '../components/Layout';
 import AnamnesisChat from '../components/AnamnesisChat';
 
@@ -34,7 +34,23 @@ type ClinicEntry = { key: string } & Clinic;
 type MapStatus  = 'loading' | 'error' | 'ready';
 type ModalStep  = 'patient' | 'chat' | 'slots' | 'success';
 
-interface Slot { label: string; iso: string; }
+const MONTHS_TR = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
+const WEEKDAYS_TR = ['Pazar', 'Pazartesi', 'Salı', 'Çarşamba', 'Perşembe', 'Cuma', 'Cumartesi'];
+
+// Lokal YYYY-MM-DD — toISOString kullanılmaz (timezone kayması riski, bkz. dateStr prensibi)
+function toYMD(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function formatDateTR(d: Date): string {
+  return `${d.getDate()} ${MONTHS_TR[d.getMonth()]} ${d.getFullYear()} ${WEEKDAYS_TR[d.getDay()]}`;
+}
+
+function todayStart(): Date {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
 
 function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const R = 6371;
@@ -44,25 +60,6 @@ function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): nu
     Math.sin(dLat / 2) ** 2 +
     Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
   return R * 2 * Math.asin(Math.sqrt(a));
-}
-
-function generateSlots(): Slot[] {
-  const schedule: [number, number, number][] = [
-    [1, 10,  0],
-    [1, 14, 30],
-    [2,  9,  0],
-    [2, 16,  0],
-    [3, 11, 30],
-  ];
-  const now = new Date();
-  return schedule.map(([dayOffset, h, m]) => {
-    const d = new Date(now);
-    d.setDate(d.getDate() + dayOffset);
-    d.setHours(h, m, 0, 0);
-    const dateLabel = d.toLocaleDateString('tr-TR', { day: 'numeric', month: 'short' });
-    const timeLabel = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-    return { label: `${dateLabel} ${timeLabel}`, iso: d.toISOString() };
-  });
 }
 
 export default function RandevuAlPage() {
@@ -85,11 +82,14 @@ export default function RandevuAlPage() {
   const [selectedPatientId, setSelectedPatientId] = useState<number | null>(null);
   const [anamnesisHistory, setAnamnesisHistory]   = useState<ChatMessage[]>([]);
   const [anamnesisSummary, setAnamnesisSummary]   = useState('');
-  const [slots, setSlots]                         = useState<Slot[]>([]);
-  const [selectedSlot, setSelectedSlot]           = useState<Slot | null>(null);
+  const [selectedDate, setSelectedDate]           = useState<Date>(todayStart());
+  const [availableSlots, setAvailableSlots]       = useState<AvailableSlot[]>([]);
+  const [selectedSlot, setSelectedSlot]           = useState<AvailableSlot | null>(null);
   const [slotsLoading, setSlotsLoading]           = useState(false);
+  const [slotsError, setSlotsError]               = useState('');
   const [saving, setSaving]                       = useState(false);
   const [saveError, setSaveError]                 = useState('');
+  const slotReqSeq = useRef(0); // hızlı tarih gezinmesinde bayat cevapları ele
 
   // ── Global hook for Leaflet popup button ──────────
   useEffect(() => {
@@ -105,6 +105,26 @@ export default function RandevuAlPage() {
   useEffect(() => {
     api.getPatients().then(setPatients).catch(() => {});
   }, []);
+
+  // ── Available slots fetch (slot adımında + tarih değişince) ──
+  useEffect(() => {
+    if (modalStep !== 'slots' || !modalClinic) return;
+    const seq = ++slotReqSeq.current;
+    setSlotsLoading(true);
+    setSlotsError('');
+    setSelectedSlot(null);
+    setAvailableSlots([]);
+    api.getAvailableSlots(modalClinic.name, toYMD(selectedDate))
+      .then(res => {
+        if (slotReqSeq.current === seq) setAvailableSlots(res.slots);
+      })
+      .catch(() => {
+        if (slotReqSeq.current === seq) setSlotsError('Müsait saatler yüklenemedi. Lütfen tekrar deneyin.');
+      })
+      .finally(() => {
+        if (slotReqSeq.current === seq) setSlotsLoading(false);
+      });
+  }, [modalStep, modalClinic, selectedDate]);
 
   // ── Leaflet map init ──────────────────────────────
   useEffect(() => {
@@ -225,54 +245,46 @@ export default function RandevuAlPage() {
   }
 
   // ── Modal helpers ─────────────────────────────────
-  function openModal(clinic: Clinic, key: string) {
-    setActiveKey(key);
-    setModalClinic(clinic);
+  function resetModalState() {
     setModalStep('patient');
     setSelectedPatientId(null);
     setAnamnesisHistory([]);
     setAnamnesisSummary('');
-    setSlots([]);
+    setSelectedDate(todayStart());
+    setAvailableSlots([]);
     setSelectedSlot(null);
     setSlotsLoading(false);
+    setSlotsError('');
     setSaving(false);
     setSaveError('');
+  }
+
+  function openModal(clinic: Clinic, key: string) {
+    setActiveKey(key);
+    setModalClinic(clinic);
+    resetModalState();
   }
 
   function closeModal() {
     setModalClinic(null);
-    setModalStep('patient');
-    setSelectedPatientId(null);
-    setAnamnesisHistory([]);
-    setAnamnesisSummary('');
-    setSlots([]);
-    setSelectedSlot(null);
-    setSlotsLoading(false);
-    setSaving(false);
-    setSaveError('');
+    resetModalState();
   }
 
-  async function handleAnamnesisComplete(history: ChatMessage[], summary: string) {
+  function handleAnamnesisComplete(history: ChatMessage[], summary: string) {
     setAnamnesisHistory(history);
     setAnamnesisSummary(summary);
-    setModalStep('slots');
-    setSlotsLoading(true);
-    try {
-      const existing = await api.getAppointments();
-      const takenIsos = new Set(
-        existing
-          .filter(a =>
-            (a.status === 'PENDING' || a.status === 'SCHEDULED') &&
-            a.clinicName === modalClinic!.name,
-          )
-          .map(a => a.date),
-      );
-      setSlots(generateSlots().filter(s => !takenIsos.has(s.iso)));
-    } catch {
-      setSlots(generateSlots());
-    } finally {
-      setSlotsLoading(false);
-    }
+    setSelectedDate(todayStart());
+    setModalStep('slots'); // slot fetch'i useEffect tetikler
+  }
+
+  const isTodaySelected = toYMD(selectedDate) === toYMD(new Date());
+
+  function changeDay(delta: number) {
+    setSelectedDate(prev => {
+      const next = new Date(prev);
+      next.setDate(next.getDate() + delta);
+      return next < todayStart() ? prev : next; // dünden geriye gidilmez
+    });
   }
 
   async function handleConfirm() {
@@ -299,6 +311,8 @@ export default function RandevuAlPage() {
       setModalStep('success');
     } catch (err: unknown) {
       setSaveError(err instanceof Error ? err.message : 'Randevu oluşturulamadı');
+      // 409 "Bu saat dolu" vb. sonrası listeyi tazele (aynı gün, yeni Date referansı effect'i tetikler)
+      setSelectedDate(prev => new Date(prev));
     } finally {
       setSaving(false);
     }
@@ -445,19 +459,41 @@ export default function RandevuAlPage() {
 
                   <div className="slot-section">
                     <p className="slot-section-label">Uygun Randevu Saatleri</p>
+
+                    <div className="slot-date-nav">
+                      <button
+                        className="slot-date-arrow"
+                        onClick={() => changeDay(-1)}
+                        disabled={isTodaySelected}
+                        aria-label="Önceki gün"
+                      >
+                        ←
+                      </button>
+                      <span className="slot-date-label">{formatDateTR(selectedDate)}</span>
+                      <button
+                        className="slot-date-arrow"
+                        onClick={() => changeDay(1)}
+                        aria-label="Sonraki gün"
+                      >
+                        →
+                      </button>
+                    </div>
+
                     {slotsLoading ? (
                       <p className="muted-text">Müsait saatler kontrol ediliyor…</p>
-                    ) : slots.length === 0 ? (
-                      <p className="muted-text">Bu klinik için müsait randevu saati bulunmuyor.</p>
+                    ) : slotsError ? (
+                      <p className="error-text">{slotsError}</p>
+                    ) : availableSlots.length === 0 ? (
+                      <p className="muted-text">Bu gün müsait randevu yok.</p>
                     ) : (
                       <div className="slot-grid">
-                        {slots.map(s => (
+                        {availableSlots.map(s => (
                           <button
                             key={s.iso}
                             className={`slot-btn${selectedSlot?.iso === s.iso ? ' slot-btn--active' : ''}`}
                             onClick={() => setSelectedSlot(s)}
                           >
-                            {s.label}
+                            {s.time}
                           </button>
                         ))}
                       </div>
@@ -491,7 +527,7 @@ export default function RandevuAlPage() {
                   <p>
                     <strong>{selectedPatient?.name}</strong> için{' '}
                     <strong>{modalClinic.name}</strong>'e{' '}
-                    <strong>{selectedSlot?.label}</strong> tarihli randevu talebiniz iletildi.
+                    <strong>{formatDateTR(selectedDate)} {selectedSlot?.time}</strong> tarihli randevu talebiniz iletildi.
                     Klinik en kısa sürede sizinle iletişime geçecektir.
                   </p>
                   <button

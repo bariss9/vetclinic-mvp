@@ -2178,6 +2178,48 @@ button:active:not(:disabled) { transform: scale(.98); }
   margin-bottom: .65rem;
 }
 
+.slot-date-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .5rem;
+  margin-bottom: .75rem;
+}
+
+.slot-date-label {
+  font-size: .9rem;
+  font-weight: 700;
+  color: var(--text-body);
+  text-align: center;
+  flex: 1;
+}
+
+.slot-date-arrow {
+  width: 2rem;
+  height: 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-body);
+  font-size: .95rem;
+  font-weight: 700;
+  transition: border-color .12s, background .12s, color .12s;
+}
+
+.slot-date-arrow:hover:not(:disabled) {
+  border-color: var(--teal);
+  background: var(--teal-dim);
+  color: var(--teal-dark);
+}
+
+.slot-date-arrow:disabled {
+  opacity: .35;
+  cursor: not-allowed;
+}
+
 .slot-grid {
   display: flex;
   flex-wrap: wrap;

@@ -67,6 +67,12 @@ export const api = {
   getAppointments: () =>
     req<Appointment[]>('GET', '/appointments'),
 
+  getAvailableSlots: (clinicName: string, date: string) =>
+    req<AvailableSlotsResponse>(
+      'GET',
+      `/appointments/available-slots?clinicName=${encodeURIComponent(clinicName)}&date=${date}`,
+    ),
+
   createAppointment: (data: CreateAppointmentInput) =>
     req<Appointment>('POST', '/appointments', data),
 
@@ -212,6 +218,17 @@ export type AppointmentStatus =
   | 'CANCELLED'
   | 'NO_SHOW'
   | 'UNCERTAIN';
+
+export interface AvailableSlot {
+  time: string; // "09:00"
+  iso: string;  // randevu POST'unda date olarak kullanılır
+}
+
+export interface AvailableSlotsResponse {
+  clinicName: string;
+  date: string; // YYYY-MM-DD
+  slots: AvailableSlot[];
+}
 
 export interface Appointment {
   id: number;

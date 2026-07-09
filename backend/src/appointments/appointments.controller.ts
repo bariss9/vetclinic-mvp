@@ -1,7 +1,8 @@
 import { Controller, Get, Post, Put, Delete, Body, Param, ParseIntPipe, Query, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
+import { ThrottlerGuard } from '@nestjs/throttler';
 import { AppointmentsService } from './appointments.service';
-import { CreateAppointmentDto, UpdateAppointmentDto } from './appointments.dto';
+import { CreateAppointmentDto, UpdateAppointmentDto, AvailableSlotsQueryDto } from './appointments.dto';
 import { JwtAuthGuard, JwtPayload } from '../auth/jwt-auth.guard';
 
 type AuthRequest = Request & { user: JwtPayload };
@@ -10,6 +11,13 @@ type AuthRequest = Request & { user: JwtPayload };
 @Controller('appointments')
 export class AppointmentsController {
   constructor(private readonly appointmentsService: AppointmentsService) {}
+
+  // NOT: ':id' rotasından ÖNCE tanımlı kalmalı — aksi halde "available-slots" ParseIntPipe'a düşer
+  @UseGuards(ThrottlerGuard)
+  @Get('available-slots')
+  findAvailableSlots(@Query() query: AvailableSlotsQueryDto) {
+    return this.appointmentsService.findAvailableSlots(query.clinicName, query.date);
+  }
 
   @Get()
   findAll(@Query('patientId') patientId: string | undefined, @Req() req: AuthRequest) {
