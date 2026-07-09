@@ -1,74 +1,90 @@
-# VetClinic AI
+# VetClinic
 
-A minimal MVP veterinary clinical AI system with AI-assisted diagnosis support and a simple clinical workflow.
+Veteriner klinik yönetim sistemi — AI destekli anamnez, randevu yönetimi ve aşı takibi içeren minimal bir MVP. Evcil hayvan sahipleri haritadan klinik seçip AI sohbetiyle anamnez doldurarak randevu alır; klinikler randevuları yönetir, takvimde izler ve aşı kayıtları tutar.
 
-## Features
+---
 
-- JWT-authenticated user accounts
-- Patient management (CRUD)
-- Medical records with AI diagnosis support (Groq LLM)
-- Anamnesis chat — structured symptom intake via a conversational AI
-- Appointment booking with nearby clinic discovery (Leaflet + OpenStreetMap)
-- Turkish-language UI
+## Özellikler
+
+- **Rol tabanlı sistem** — iki ayrı panel: **OWNER** (evcil hayvan sahibi: hayvanlarım, randevularım, randevu al) ve **CLINIC** (hastalar, randevu istekleri, takvim)
+- **AI destekli anamnez** — Groq (`llama-3.1-8b-instant`) ile 7 soruluk sabit akış; her cevap 0-100 relevans skoruyla doğrulanır, alakasız cevapta soru yeniden sorulur
+- **E-posta doğrulama** — kayıt sonrası Resend ile 6 haneli kod, 2 dakika geçerli; doğrulanmadan giriş yapılamaz
+- **Randevu sistemi** — harita tabanlı klinik seçimi (Leaflet + OpenStreetMap), slot bazlı rezervasyon (09:00–17:00, saat başı), backend çakışma kontrolü (dolu saate 409), durum yönetimi: `PENDING` / `SCHEDULED` / `COMPLETED` / `NO_SHOW` / `UNCERTAIN` / `CANCELLED` (rol bazlı geçiş kısıtları)
+- **Takvim** — klinik paneli aylık takvimi: renk kodlu randevu durumları + planlanmış aşılar
+- **Aşı takibi** — klinik ekler/düzenler/siler (sadece kendi oluşturduğu kayıtları), owner salt okunur görüntüler
+- **Otomatik bildirimler** —
+  - randevudan 1 gün önce hasta sahibine hatırlatma maili (günlük cron 09:00)
+  - yeni randevu talebinde kliniğe anlık bildirim maili
+  - onay bekleyen (PENDING) randevular için kliniğe 30 dakikada bir hatırlatma (randevu başına max 3)
+  - tarihi 2+ gün geçmiş SCHEDULED randevular otomatik `UNCERTAIN` olur (günlük cron 08:00)
+- **Güvenlik** — JWT auth (fail-closed: `JWT_SECRET` yoksa uygulama açılmaz), rate limiting (`@nestjs/throttler`), ownership kontrolü (OWNER sadece kendi kayıtlarını görür/değiştirir), verify-email brute-force sayacı
 
 ---
 
 ## Tech Stack
 
-| Layer | Technology |
+| Katman | Teknoloji |
 |---|---|
-| Backend | NestJS (modular monolith), Prisma ORM, PostgreSQL, REST API, JWT |
-| Frontend | React 19 + Vite + TypeScript (strict), react-router-dom v7 |
-| AI | Groq REST API — `llama-3.3-70b-versatile` model |
-| Map | Leaflet.js + Overpass API (OpenStreetMap data) |
+| Backend | NestJS (modular monolith), Prisma ORM, PostgreSQL, JWT (HS256), `@nestjs/schedule` (cron), `@nestjs/throttler` |
+| Frontend | React 19 + Vite + TypeScript (strict mode), react-router-dom v7, sade CSS |
+| AI | Groq REST API — `llama-3.1-8b-instant` (anamnez cevap validasyonu) |
+| Mail | Resend API (doğrulama kodları + randevu bildirimleri) |
+| Harita | Leaflet.js + Overpass API (OpenStreetMap verisi, 10 km yarıçap) |
 
 ---
 
-## Prerequisites
+## Gereksinimler
 
-- **Node.js** 18 or later
-- **PostgreSQL** 16 or later
-- **Groq API key** — free tier available at [console.groq.com](https://console.groq.com)
+- **Node.js** 18+
+- **PostgreSQL** 18
+- **Groq API key** — ücretsiz: [console.groq.com](https://console.groq.com)
+- **Resend API key** — ücretsiz: [resend.com](https://resend.com). Test modunda mail **sadece Resend hesabına kayıtlı adrese** gider; başka adreslere göndermek için [resend.com/domains](https://resend.com/domains)'de bir domain doğrulayıp `backend/src/mail/mail.service.ts`'deki `from` adresini o domaine çevirin.
 
 ---
 
-## Setup
+## Kurulum
 
-### 1. Clone the repository
+### 1. PostgreSQL
 
-```bash
-git clone <repo-url>
-cd VetClinic-MVP
+İlk kurulumda (data dizini boşsa):
+
+```
+initdb -D C:\pgdata -U postgres --locale=C --encoding=UTF8
 ```
 
-### 2. PostgreSQL
+> **Not:** `--locale=C` önemli — Windows Türkçe locale'i PostgreSQL'i kırıyor. Windows kullanıcı adınızda Türkçe karakter varsa varsayılan data dizini de sorun çıkarabilir; `C:\pgdata` gibi ASCII bir yol kullanın.
 
-Create a database named `vetclinic`:
+Sunucuyu başlatın (Windows service kayıtlı değilse her oturumda gerekir):
+
+```
+pg_ctl start -D C:\pgdata
+```
+
+Veritabanını oluşturun:
 
 ```sql
 CREATE DATABASE vetclinic;
+ALTER USER postgres WITH PASSWORD 'postgres';
 ```
 
-> **Windows note:** If your Windows username contains non-ASCII characters, PostgreSQL may fail to initialise at the default data directory. Use a custom path:
-> ```
-> initdb -D C:\pgdata -U postgres
-> pg_ctl start -D C:\pgdata
-> ```
-
-### 3. Backend
+### 2. Backend
 
 ```bash
 cd backend
 npm install
-cp .env.example .env   # then fill in your values (see below)
-npx prisma db push
-npx prisma generate
+```
+
+`backend/.env.example` dosyasını `backend/.env` olarak kopyalayıp değerleri doldurun (aşağıdaki tabloya bakın), ardından:
+
+```bash
+npx prisma migrate deploy   # migration'ları uygular
+npx prisma generate         # TypeScript client'ı üretir
 npm run start:dev
 ```
 
-The API will be available at `http://localhost:3000`.
+> Şema yönetimi migration tabanlıdır — `prisma db push` kullanmayın. Yeni şema değişikliği için: `npx prisma migrate dev --name <açıklayıcı_isim>`
 
-### 4. Frontend
+### 3. Frontend
 
 ```bash
 cd frontend
@@ -76,77 +92,73 @@ npm install
 npm run dev
 ```
 
-The app will be available at `http://localhost:5173`.
-
 ---
 
-## Environment Variables
+## Ortam Değişkenleri (`backend/.env`)
 
-Copy `backend/.env.example` to `backend/.env` and fill in the values:
-
-```env
-DATABASE_URL="postgresql://postgres:your_password@localhost:5432/vetclinic"
-JWT_SECRET="change_me_to_a_long_random_secret"
-GROQ_API_KEY="your-groq-api-key-here"
-ANTHROPIC_API_KEY="your-anthropic-api-key-here"
-```
-
-| Variable | Required | Description |
+| Değişken | Zorunlu | Açıklama |
 |---|---|---|
-| `DATABASE_URL` | Yes | PostgreSQL connection string |
-| `JWT_SECRET` | Yes | Secret used to sign JWT tokens |
-| `GROQ_API_KEY` | Yes | Groq API key for the anamnesis chat LLM |
-| `ANTHROPIC_API_KEY` | No | Placeholder — AI diagnosis endpoint currently returns a mock |
+| `DATABASE_URL` | Evet | PostgreSQL bağlantı string'i — örn. `postgresql://postgres:postgres@localhost:5432/vetclinic` |
+| `JWT_SECRET` | Evet | JWT imzalama secret'ı — tanımlı değilse backend açılmaz (fail-closed) |
+| `GROQ_API_KEY` | Evet | Anamnez cevap validasyonu için Groq API anahtarı |
+| `ANTHROPIC_API_KEY` | Hayır | Placeholder — AI tanı endpoint'i şu an structured mock döner, ileride kullanılacak |
+| `RESEND_API_KEY` | Evet | E-posta doğrulama kodları ve randevu bildirimleri için Resend API anahtarı |
+| `TEST_EMAIL_TO` | Hayır | Lokal mail testleri için hedef adres — sadece geliştirmede kullanılır |
 
-The frontend has no environment variables in development.
-
----
-
-## Running Both Servers
-
-Open two terminals:
-
-```bash
-# Terminal 1 — backend (port 3000)
-cd backend && npm run start:dev
-
-# Terminal 2 — frontend (port 5173)
-cd frontend && npm run dev
-```
+Frontend'in geliştirme ortamında env değişkeni yoktur.
 
 ---
 
-## Project Structure
+## Varsayılan URL'ler
+
+| Servis | URL |
+|---|---|
+| Backend API | http://localhost:3000 |
+| Frontend | http://localhost:5173 |
+
+---
+
+## Proje Yapısı
 
 ```
 VetClinic-MVP/
-├── backend/          # NestJS API
+├── backend/
 │   ├── src/
-│   │   ├── users/          # Auth — register + login
-│   │   ├── patients/       # Patient CRUD
-│   │   ├── medical-records/
-│   │   ├── appointments/
-│   │   ├── ai/             # Diagnosis endpoint
-│   │   └── anamnesis/      # Chat-based history intake (Groq)
+│   │   ├── users/            # Kayıt + giriş, e-posta doğrulama, JWT üretimi, rate limiting
+│   │   ├── auth/             # JwtAuthGuard — Bearer token doğrular, req.user set eder
+│   │   ├── patients/         # Hasta (hayvan) CRUD, ownership filtreleme
+│   │   ├── medical-records/  # Tıbbi kayıtlar: semptomlar, AI sonucu, anamnez JSON
+│   │   ├── appointments/     # Randevu CRUD, available-slots, durum geçişleri, cron'lar
+│   │   ├── ai/               # POST /ai/diagnose — tanı destek endpoint'i (şu an mock)
+│   │   ├── anamnesis/        # 7 soruluk validasyon akışı (Groq skorlama)
+│   │   ├── vaccinations/     # Aşı kayıtları — CLINIC yazar, OWNER okur
+│   │   ├── mail/             # MailService (Resend) — @Global modül
+│   │   └── prisma/           # PrismaService
 │   └── prisma/
-│       └── schema.prisma
-└── frontend/         # React + Vite
+│       ├── schema.prisma
+│       └── migrations/       # git'te takip edilir — migrate deploy ile uygulanır
+└── frontend/
     └── src/
         ├── pages/
-        │   ├── LoginPage.tsx
-        │   ├── PatientsPage.tsx
-        │   ├── PatientDetailPage.tsx
-        │   ├── RandevuAlPage.tsx   # Nearby clinics + appointment booking
-        │   └── RandevularimPage.tsx # My appointments
-        └── components/
-            ├── Layout.tsx
-            └── AnamnesisChat.tsx
+        │   ├── LoginPage.tsx            # Giriş — token bellekte tutulur
+        │   ├── RegisterPage.tsx         # Kayıt — OWNER/CLINIC rol seçimi
+        │   ├── VerifyEmailPage.tsx      # 6 haneli kod + 120 sn geri sayım
+        │   ├── PatientsPage.tsx         # OWNER: "Evcil Hayvanlarım" / CLINIC: "Hastalar"
+        │   ├── PatientDetailPage.tsx    # Tıbbi kayıtlar, AI tanı, anamnez, aşı takibi
+        │   ├── RandevularimPage.tsx     # OWNER: kendi randevuları
+        │   ├── RandevuAlPage.tsx        # OWNER: harita → hasta → anamnez → slot → randevu
+        │   ├── RandevuIstekleriPage.tsx # CLINIC: bekleyen istekler + planlanmış randevular
+        │   └── TakvimPage.tsx           # CLINIC: aylık takvim (randevular + aşı planları)
+        └── components/                  # Layout, AnamnesisChat, AnamnesisStructured
 ```
+
+Tüm arayüz metinleri Türkçedir.
 
 ---
 
-## Notes
+## Bilinen Kısıtlar
 
-- AI diagnosis output is advisory only and must not replace a licensed veterinarian.
-- The `ANTHROPIC_API_KEY` variable is reserved for a future upgrade to the diagnosis endpoint; it is not used in this MVP.
-- Nearby clinic data is sourced from OpenStreetMap via the Overpass API — accuracy depends on OSM contributors in your area.
+- **Resend test modu** — doğrulanmış domain olmadan mail yalnızca Resend hesabına kayıtlı adrese gider. Diğer adreslere gönderim sessizce başarısız olur: kayıt/doğrulama akışında kullanıcıya 503 döner, randevu bildirimlerinde ise sadece WARN loglanır (randevu oluşmaya devam eder).
+- **verify-email deneme sayacı in-memory** — e-posta başına max 5 hatalı deneme / 10 dk sınırı process belleğinde tutulur; tek instance için geçerlidir, çok-instance üretimde Redis gibi paylaşımlı bir store'a taşınmalıdır.
+- **Klinik bildirimi isim eşleşmesine bağlı** — randevudaki klinik adı Overpass'tan (OpenStreetMap) gelir; kliniğe mail gidebilmesi için sistemde kayıtlı `Clinic.name` değerinin bu adla **birebir** (büyük/küçük harf dahil) eşleşmesi gerekir. Eşleşme yoksa bildirim atlanır ve WARN loglanır.
+- **AI tanı çıktısı yalnızca karar desteğidir** — veteriner hekim kararının yerini almaz; tanı endpoint'i şu an structured mock döndürür.
